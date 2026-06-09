@@ -1,0 +1,8 @@
+.env
+.prefs.json
+__pycache__/
+build/
+dist/
+_debug_html.txt
+*.pyc
+ms-playwright/

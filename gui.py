@@ -49,7 +49,7 @@ ctk.set_default_color_theme("blue")
 
 _BASE_DIR = Path(sys.executable).parent if getattr(sys, "frozen", False) else Path(__file__).parent
 ENV_PATH = _BASE_DIR / ".env"
-APP_VERSION = "v1.6.16"
+APP_VERSION = "v1.6.18"
 APP_TITLE   = f"Bamhobak Blog Bot {APP_VERSION}"
 
 _DEFAULT_GITHUB_TOKEN  = ""
@@ -3289,7 +3289,8 @@ Remove-Item -Path (Split-Path $log) -Recurse -Force -ErrorAction SilentlyContinu
                 if self._stop_event.is_set():
                     self._set_text_status("중단됨", 0, C["err"])
                 else:
-                    err_box.append(f"글 오류: {e}")
+                    _emsg = "제미나이 1076 오류입니다. 다시 시도해주세요." if "gemini_server_error" in str(e) else f"글 오류: {e}"
+                    err_box.append(_emsg)
                     self._set_text_status("오류", 0, C["err"])
 
             img_done.wait()
@@ -3354,8 +3355,9 @@ Remove-Item -Path (Split-Path $log) -Recurse -Force -ErrorAction SilentlyContinu
                 self._set_text_status("중단됨", 0, C["err"])
                 self._set_status("⏹  중단됨", color=C["err"])
             else:
+                _emsg = "제미나이 1076 오류입니다. 다시 시도해주세요." if "gemini_server_error" in str(e) else f"오류: {e}"
                 self._set_text_status("오류", 0, C["err"])
-                self._set_status(f"❌  오류: {e}", color=C["err"])
+                self._set_status(f"❌  {_emsg}", color=C["err"])
         finally:
             self._stop_timer()
             self._lock_btns(False)

@@ -104,6 +104,14 @@ m_gist  = re.search(r'_DEFAULT_GIST_URL\s*=\s*"[^"]+/([a-f0-9]{20,})/raw/', gui_
 m_repo  = re.search(r'_DEFAULT_GITHUB_REPO\s*=\s*"([^"]+)"', gui_text)
 
 GITHUB_TOKEN = m_token.group(1) if m_token else ""
+# gui.py에 토큰이 없으면 .env에서 읽기
+if not GITHUB_TOKEN:
+    env_path = BASE / ".env"
+    if env_path.exists():
+        for line in env_path.read_text(encoding="utf-8").splitlines():
+            if line.startswith("GITHUB_TOKEN="):
+                GITHUB_TOKEN = line.split("=", 1)[1].strip()
+                break
 GIST_ID      = m_gist.group(1)  if m_gist  else ""
 GITHUB_REPO  = m_repo.group(1)  if m_repo  else "bamhobak/BamhobakBlogBot"
 

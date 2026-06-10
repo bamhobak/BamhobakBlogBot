@@ -298,6 +298,19 @@ def _wait_for_response(page, timeout_sec: int):
     _wait(0.5)
 
 
+_GEMINI_ERR_PATTERNS = [
+    "Something went wrong",
+    "문제가 발생했습니다",
+    "오류가 발생했어요",
+]
+
+
+def _check_gemini_error(text: str):
+    for pat in _GEMINI_ERR_PATTERNS:
+        if pat.lower() in text.lower():
+            raise RuntimeError("gemini_server_error")
+
+
 def _extract_response(page) -> str:
     for sel in _RESP_SELS:
         try:
@@ -305,18 +318,22 @@ def _extract_response(page) -> str:
             if els:
                 html = els[-1].inner_html(timeout=5000).strip()
                 if len(html) > 20:
-                    # 디버그: HTML 원본 저장
                     try:
                         import os
                         dbg = os.path.join(os.path.dirname(os.path.abspath(__file__)), "_debug_html.txt")
                         open(dbg, "w", encoding="utf-8").write(html[:8000])
                     except Exception:
                         pass
-                    return _html_to_markdown(html)
+                    md = _html_to_markdown(html)
+                    _check_gemini_error(md)
+                    return md
+        except RuntimeError:
+            raise
         except Exception:
             continue
     text = page.inner_text("body")
     if text and len(text) > 50:
+        _check_gemini_error(text)
         return text
     raise RuntimeError("응답을 추출하지 못했습니다.")
 

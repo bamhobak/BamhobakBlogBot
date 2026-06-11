@@ -49,7 +49,7 @@ ctk.set_default_color_theme("blue")
 
 _BASE_DIR = Path(sys.executable).parent if getattr(sys, "frozen", False) else Path(__file__).parent
 ENV_PATH = _BASE_DIR / ".env"
-APP_VERSION = "v1.6.20"
+APP_VERSION = "v1.6.65"
 APP_TITLE   = f"Bamhobak Blog Bot {APP_VERSION}"
 
 _DEFAULT_GITHUB_TOKEN  = ""
@@ -414,6 +414,16 @@ class App(ctk.CTk):
         self._kw2_enabled = [False] * 15
         self._option_enabled = [True] * 15
         self._topic_enabled = [False] * 15
+        self._collect_enabled = [False] * 15
+        self._collect_count    = 5
+        self._collect_skip     = 0
+        self._collect_chunk    = "0"
+        self._collect_maxchars = 0
+        self._collect_header   = "[인기글 참조]"
+        self._collect_delimiters = ""
+        self._collect_ending     = ""
+        self._collect_bottom     = ""
+        self.kw2_var = tk.BooleanVar(value=False)
         self._topic_lists = {}
         self._prompt_names = [f"옵션 {i+1}" for i in range(15)]
         self._selected_prompt_idx = 0
@@ -506,6 +516,15 @@ class App(ctk.CTk):
             "kw2_enabled":          self._kw2_enabled,
             "option_enabled":       self._option_enabled,
             "topic_enabled":        self._topic_enabled,
+            "collect_enabled":      self._collect_enabled,
+            "collect_count":        self._collect_count,
+            "collect_skip":         self._collect_skip,
+            "collect_chunk":        self._collect_chunk,
+            "collect_maxchars":     self._collect_maxchars,
+            "collect_header":       self._collect_header,
+            "collect_delimiters":   self._collect_delimiters,
+            "collect_ending":       self._collect_ending,
+            "collect_bottom":       self._collect_bottom,
             "topic_lists":          self._topic_lists,
             "prompt_names":         self._prompt_names,
             "selected_prompt_idx":  self._selected_prompt_idx,
@@ -554,6 +573,29 @@ class App(ctk.CTk):
             if isinstance(saved_te, list):
                 for i, v in enumerate(saved_te[:15]):
                     self._topic_enabled[i] = bool(v)
+        if saved_ce := self._prefs.get("collect_enabled"):
+            if isinstance(saved_ce, list):
+                for i, v in enumerate(saved_ce[:15]):
+                    self._collect_enabled[i] = bool(v)
+        if cc := self._prefs.get("collect_count"):
+            try: self._collect_count = int(cc)
+            except Exception: pass
+        if cs := self._prefs.get("collect_skip"):
+            try: self._collect_skip = int(cs)
+            except Exception: pass
+        if ck := self._prefs.get("collect_chunk"):
+            self._collect_chunk = str(ck)
+        if cm := self._prefs.get("collect_maxchars"):
+            try: self._collect_maxchars = int(cm)
+            except Exception: pass
+        if ch := self._prefs.get("collect_header"):
+            self._collect_header = str(ch)
+        if cd := self._prefs.get("collect_delimiters"):
+            self._collect_delimiters = str(cd)
+        if ce := self._prefs.get("collect_ending"):
+            self._collect_ending = str(ce)
+        if cb := self._prefs.get("collect_bottom"):
+            self._collect_bottom = str(cb)
         if tl := self._prefs.get("topic_lists"):
             if isinstance(tl, dict):
                 for k, v in tl.items():
@@ -838,6 +880,23 @@ class App(ctk.CTk):
             if isinstance(te, list):
                 for i, v in enumerate(te[:15]):
                     self._topic_enabled[i] = bool(v)
+        if ce := data.get("collect_enabled"):
+            if isinstance(ce, list):
+                for i, v in enumerate(ce[:15]):
+                    self._collect_enabled[i] = bool(v)
+        if cc := data.get("collect_count"):
+            try: self._collect_count = int(cc)
+            except Exception: pass
+        if cs := data.get("collect_skip"):
+            try: self._collect_skip = int(cs)
+            except Exception: pass
+        if ck := data.get("collect_chunk"):
+            self._collect_chunk = str(ck)
+        if cm := data.get("collect_maxchars"):
+            try: self._collect_maxchars = int(cm)
+            except Exception: pass
+        if ch := data.get("collect_header"):
+            self._collect_header = str(ch)
         if tl := data.get("topic_lists"):
             if isinstance(tl, dict):
                 for k, v in tl.items():
@@ -1080,7 +1139,17 @@ class App(ctk.CTk):
         )
         # 초기 숨김
 
-        _lbl(row1, "주제", font=F_B).pack(side="left", padx=(0, 6))
+        self.kw2_lbl = ctk.CTkCheckBox(
+            row1, text="주제",
+            variable=self.kw2_var,
+            command=self._on_kw2_toggle,
+            font=F_B,
+            fg_color=C["accent"], hover_color=C["accent_h"],
+            checkmark_color="white",
+            text_color=C["subtext"],
+            width=20, height=20,
+        )
+        self.kw2_lbl.pack(side="left", padx=(0, 6))
         self.kw2_entry = ctk.CTkEntry(
             row1,
             placeholder_text="두 번째 키워드",
@@ -2060,8 +2129,19 @@ class App(ctk.CTk):
         else:
             self.prompt_selector.set(current)
 
+    def _on_kw2_toggle(self):
+        idx = self._selected_prompt_idx
+        self._kw2_enabled[idx] = self.kw2_var.get()
+        self._update_kw2_state()
+        self._save_prefs()
+
     def _update_kw2_state(self):
-        enabled = self._kw2_enabled[self._selected_prompt_idx]
+        idx = self._selected_prompt_idx
+        enabled = self._kw2_enabled[idx]
+        collect_on = self._collect_enabled[idx]
+        label = "업체(제품)" if collect_on else "주제"
+        self.kw2_var.set(enabled)
+        self.kw2_lbl.configure(text=label)
         # CTkEntry.configure()가 내부 위젯을 재구성하면 텍스트가 사라지므로 직접 보존
         try:
             saved = self.kw2_entry._entry.get()
@@ -2349,6 +2429,7 @@ Remove-Item -Path (Split-Path $log) -Recurse -Force -ErrorAction SilentlyContinu
         working2        = list(self._prompts2)
         working_kw2     = list(self._kw2_enabled)
         working_topic   = list(self._topic_enabled)
+        working_collect = list(self._collect_enabled)
         working_enabled = list(self._option_enabled)
         working_names   = list(self._prompt_names)
         cur_idx         = [self._selected_prompt_idx]
@@ -2363,25 +2444,33 @@ Remove-Item -Path (Split-Path $log) -Recurse -Force -ErrorAction SilentlyContinu
         tab2_content = ctk.CTkFrame(dlg, fg_color="transparent")
         tab3_content = ctk.CTkFrame(dlg, fg_color="transparent")
         tab4_content = ctk.CTkFrame(dlg, fg_color="transparent")
+        tab5_content = ctk.CTkFrame(dlg, fg_color="transparent")
         active_tab = [1]
-        tab1_btn_ref = [None]; tab2_btn_ref = [None]; tab3_btn_ref = [None]; tab4_btn_ref = [None]
-        btn_row_ref  = [None]
+        tab1_btn_ref = [None]; tab2_btn_ref = [None]; tab3_btn_ref = [None]
+        tab4_btn_ref = [None]; tab5_btn_ref = [None]
+        btn_row_ref   = [None]
+        _clear_btn_ref = [None]
+        _all_tabs    = [tab1_content, tab2_content, tab3_content, tab4_content, tab5_content]
 
         def _show_tab(n):
             active_tab[0] = n
-            for tf in [tab1_content, tab2_content, tab3_content, tab4_content]:
+            for tf in _all_tabs:
                 tf.pack_forget()
-            for tb, idx in [(tab1_btn_ref[0],1),(tab2_btn_ref[0],2),(tab3_btn_ref[0],3),(tab4_btn_ref[0],4)]:
+            for tb, idx in [
+                (tab1_btn_ref[0],1),(tab2_btn_ref[0],2),(tab3_btn_ref[0],3),
+                (tab4_btn_ref[0],4),(tab5_btn_ref[0],5),
+            ]:
                 if tb:
                     tb.configure(fg_color=C["accent"] if idx==n else "transparent",
                                  text_color="white" if idx==n else C["subtext"])
-            [tab1_content, tab2_content, tab3_content, tab4_content][n-1].pack(
-                fill="both", expand=True, padx=12, pady=(8, 0))
+            _all_tabs[n-1].pack(fill="both", expand=True, padx=12, pady=(8, 0))
             if btn_row_ref[0]:
-                if n in (3, 4):
-                    btn_row_ref[0].pack_forget()
+                btn_row_ref[0].pack(fill="x", padx=12, pady=(4, 4), side="bottom")
+            if _clear_btn_ref[0]:
+                if n == 2:
+                    _clear_btn_ref[0].pack(side="right", padx=(6, 0))
                 else:
-                    btn_row_ref[0].pack(fill="x", padx=12, pady=(4, 4), side="bottom")
+                    _clear_btn_ref[0].pack_forget()
 
         tab1_btn = ctk.CTkButton(
             tab_btn_row, text="프롬프트 옵션",
@@ -2404,7 +2493,7 @@ Remove-Item -Path (Split-Path $log) -Recurse -Force -ErrorAction SilentlyContinu
         tab2_btn_ref[0] = tab2_btn
 
         tab3_btn = ctk.CTkButton(
-            tab_btn_row, text="🔒 허용 MAC",
+            tab_btn_row, text="허용 MAC",
             command=lambda: _show_tab(3),
             width=120, height=32, font=F_SMB,
             fg_color="transparent", hover_color=C["border"],
@@ -2414,7 +2503,7 @@ Remove-Item -Path (Split-Path $log) -Recurse -Force -ErrorAction SilentlyContinu
         tab3_btn_ref[0] = tab3_btn
 
         tab4_btn = ctk.CTkButton(
-            tab_btn_row, text="📋 주제 목록",
+            tab_btn_row, text="주제 목록",
             command=lambda: _show_tab(4),
             width=120, height=32, font=F_SMB,
             fg_color="transparent", hover_color=C["border"],
@@ -2423,6 +2512,15 @@ Remove-Item -Path (Split-Path $log) -Recurse -Force -ErrorAction SilentlyContinu
         tab4_btn.pack(side="left", padx=(0, 4), pady=2)
         tab4_btn_ref[0] = tab4_btn
 
+        tab5_btn = ctk.CTkButton(
+            tab_btn_row, text="인기글 수집",
+            command=lambda: _show_tab(5),
+            width=120, height=32, font=F_SMB,
+            fg_color="transparent", hover_color=C["border"],
+            text_color=C["subtext"], corner_radius=6,
+        )
+        tab5_btn.pack(side="left", padx=(0, 4), pady=2)
+        tab5_btn_ref[0] = tab5_btn
 
         # ── 하단 고정 영역 먼저 side="bottom"으로 팩 ──────
         sync_area = ctk.CTkFrame(dlg, fg_color="transparent")
@@ -2490,6 +2588,19 @@ Remove-Item -Path (Split-Path $log) -Recurse -Force -ErrorAction SilentlyContinu
         ).pack(side="left")
         _lbl(topic_row, "  —  키워드별 저장된 주제 목록에서 랜덤 선택.", font=F_SM, color=C["subtext"]).pack(side="left")
 
+        collect_var = ctk.BooleanVar(value=working_collect[cur_idx[0]])
+        collect_row = ctk.CTkFrame(right, fg_color="transparent")
+        collect_row.pack(fill="x", pady=(0, 6))
+        ctk.CTkCheckBox(
+            collect_row, text="인기글 수집 사용",
+            variable=collect_var,
+            font=F_SMB, text_color=C["text"],
+            fg_color=C["accent"], hover_color=C["accent_h"],
+            checkmark_color="white",
+            width=20, height=20,
+        ).pack(side="left")
+        _lbl(collect_row, "  —  인기글 상위글 수집 후 참조.", font=F_SM, color=C["subtext"]).pack(side="left")
+
         kw2_var = ctk.BooleanVar(value=working_kw2[cur_idx[0]])
         cb_row = ctk.CTkFrame(right, fg_color="transparent")
         cb_row.pack(fill="x", pady=(0, 3))
@@ -2546,11 +2657,12 @@ Remove-Item -Path (Split-Path $log) -Recurse -Force -ErrorAction SilentlyContinu
             opt_btns[i].configure(text=_btn_label(i), fg_color=fc, text_color=tc)
 
         def _switch_to(idx):
-            working_names[cur_idx[0]] = name_entry.get().strip() or f"옵션 {cur_idx[0]+1}"
-            working[cur_idx[0]]       = txt1.get("1.0", "end").strip()
-            working2[cur_idx[0]]      = txt2.get("1.0", "end").strip()
-            working_kw2[cur_idx[0]]   = kw2_var.get()
-            working_topic[cur_idx[0]] = topic_var.get()
+            working_names[cur_idx[0]]   = name_entry.get().strip() or f"옵션 {cur_idx[0]+1}"
+            working[cur_idx[0]]         = txt1.get("1.0", "end").strip()
+            working2[cur_idx[0]]        = txt2.get("1.0", "end").strip()
+            working_kw2[cur_idx[0]]     = kw2_var.get()
+            working_topic[cur_idx[0]]   = topic_var.get()
+            working_collect[cur_idx[0]] = collect_var.get()
             working_enabled[cur_idx[0]] = enabled_var.get()
             _update_btn_style(cur_idx[0], selected=False)
             cur_idx[0] = idx
@@ -2560,6 +2672,7 @@ Remove-Item -Path (Split-Path $log) -Recurse -Force -ErrorAction SilentlyContinu
             enabled_var.set(working_enabled[idx])
             kw2_var.set(working_kw2[idx])
             topic_var.set(working_topic[idx])
+            collect_var.set(working_collect[idx])
             _refresh_txt2()
             txt1.delete("1.0", "end")
             if working[idx]:
@@ -2621,8 +2734,9 @@ Remove-Item -Path (Split-Path $log) -Recurse -Force -ErrorAction SilentlyContinu
             working2[ci]        = txt2.get("1.0", "end").strip()
             working_kw2[ci]     = kw2_var.get()
             working_topic[ci]   = topic_var.get()
+            working_collect[ci] = collect_var.get()
             working_enabled[ci] = enabled_var.get()
-            for arr in [working, working2, working_names, working_enabled, working_kw2, working_topic]:
+            for arr in [working, working2, working_names, working_enabled, working_kw2, working_topic, working_collect]:
                 arr.insert(dst_idx, arr.pop(src_idx))
             if ci == src_idx:
                 cur_idx[0] = dst_idx
@@ -2637,6 +2751,7 @@ Remove-Item -Path (Split-Path $log) -Recurse -Force -ErrorAction SilentlyContinu
             enabled_var.set(working_enabled[idx])
             kw2_var.set(working_kw2[idx])
             topic_var.set(working_topic[idx])
+            collect_var.set(working_collect[idx])
             txt1.delete("1.0", "end")
             if working[idx]:
                 txt1.insert("1.0", working[idx])
@@ -2945,14 +3060,8 @@ Remove-Item -Path (Split-Path $log) -Recurse -Force -ErrorAction SilentlyContinu
         def _save_mac():
             self._mac_entries = [dict(e) for e in mac_entries_work]
             self._save_prefs()
-            save_mac_btn.configure(text="✅ 저장됨", fg_color=C["ok"])
-            tab3_content.after(1500, lambda: save_mac_btn.configure(text="💾 저장", fg_color=C["accent"]))
-
-        save_mac_btn = ctk.CTkButton(tab3_content, text="💾 저장", command=_save_mac,
-                                      width=120, height=34, font=F_SMB,
-                                      fg_color=C["accent"], hover_color=C["accent_h"],
-                                      text_color="white", corner_radius=8)
-        save_mac_btn.pack(anchor="e", pady=(0, 4))
+            save_notify.configure(text="✅ 저장됨")
+            dlg.after(2000, lambda: save_notify.configure(text=""))
 
         # ── 탭4 내용: 주제 목록 관리 ─────────────────────
         working_topics = {k: list(v) for k, v in self._topic_lists.items()}
@@ -3173,21 +3282,212 @@ Remove-Item -Path (Split-Path $log) -Recurse -Force -ErrorAction SilentlyContinu
             self._topic_lists = {k: list(v) for k, v in working_topics.items()}
             self._save_prefs()
             self._update_topic_state()
-            tl_save_btn.configure(text="✅ 저장됨", fg_color=C["ok"])
-            tab4_content.after(1500, lambda: tl_save_btn.configure(text="💾 저장", fg_color=C["accent"]))
+            save_notify.configure(text="✅ 저장됨")
+            dlg.after(2000, lambda: save_notify.configure(text=""))
 
         _btn(tl_btn_row, "+ 주제 추가", _add_kw, w=100, h=30).pack(side="left")
         _btn(tl_btn_row, "🗑 삭제", _del_kw, w=80, h=30,
              color=C["err"], hover="#A03030").pack(side="left", padx=(6, 0))
-        tl_save_btn = _btn(tl_btn_row, "💾 저장", _save_topics, w=80, h=30)
-        tl_save_btn.pack(side="right")
 
         _refresh_kw_list()
         if working_topics:
             _select_kw(next(iter(working_topics)))
 
+        # ── 탭5 내용: 인기글 수집 ────────────────────────
+        import threading as _threading
+        import naver_collector as _nc
+
+        c5_opt_count_var      = tk.StringVar(value=str(self._collect_count))
+        c5_opt_skip_var       = tk.StringVar(value=str(self._collect_skip))
+        c5_opt_chunk_var      = tk.StringVar(value=self._collect_chunk)
+        c5_opt_maxch_var      = tk.StringVar(value=str(self._collect_maxchars))
+        c5_opt_header_var     = tk.StringVar(value=self._collect_header)
+        c5_opt_delimiters_var = tk.StringVar(value=self._collect_delimiters)
+        c5_opt_ending_var     = tk.StringVar(value=self._collect_ending)
+        c5_opt_bottom_var     = tk.StringVar(value=self._collect_bottom)
+
+        def _c5_save_opts():
+            try: self._collect_count    = int(c5_opt_count_var.get())
+            except Exception: pass
+            try: self._collect_skip     = int(c5_opt_skip_var.get())
+            except Exception: pass
+            self._collect_chunk         = c5_opt_chunk_var.get().strip() or "0"
+            try: self._collect_maxchars = int(c5_opt_maxch_var.get())
+            except Exception: pass
+            self._collect_header        = c5_opt_header_var.get().strip() or "[인기글 참조]"
+            c5_opt_header_var.set(self._collect_header)
+            self._collect_delimiters    = c5_opt_delimiters_var.get().strip()
+            self._collect_ending        = c5_opt_ending_var.get().strip()
+            self._collect_bottom        = c5_opt_bottom_var.get().strip()
+            self._save_prefs()
+            save_notify.configure(text="✅ 저장됨")
+            dlg.after(2000, lambda: save_notify.configure(text=""))
+
+        # ── 옵션 영역 (side="bottom") ─────────────────────
+        c5_opt_frame = ctk.CTkFrame(tab5_content, fg_color=C["input_bg"],
+                                    corner_radius=8, border_width=0)
+        c5_opt_frame.pack(side="bottom", fill="x", pady=(8, 4))
+
+        def _opt_entry(parent, var, w=60):
+            ctk.CTkEntry(parent, textvariable=var, width=w, height=28, font=F_SM,
+                         fg_color=C["bg"], border_color=C["border"],
+                         text_color=C["text"], corner_radius=6, justify="center",
+            ).pack(side="left", padx=(0, 6))
+
+        def _div(parent):
+            ctk.CTkFrame(parent, fg_color=C["border"], width=1, height=20).pack(side="left", padx=14)
+
+        # 구분 기준 버튼 행
+        def _open_delimiters_dlg():
+            d = ctk.CTkToplevel(dlg)
+            d.title("구분 기준 설정")
+            d.geometry("440x150")
+            d.resizable(False, False)
+            d.grab_set(); d.lift()
+            sw2, sh2 = d.winfo_screenwidth(), d.winfo_screenheight()
+            d.geometry(f"440x150+{(sw2-440)//2}+{(sh2-150)//2}")
+            _lbl(d, "구분 단어 ( ; 로 구분, 예: 어요;에요;예요;니다 )",
+                 font=F_SM, color=C["subtext"]).pack(pady=(14, 6), padx=16, anchor="w")
+            entry = ctk.CTkEntry(d, width=410, height=32, font=F,
+                                 fg_color=C["input_bg"], border_color=C["border"],
+                                 text_color=C["text"], corner_radius=7)
+            entry.pack(padx=16)
+            entry.insert(0, c5_opt_delimiters_var.get())
+            def _ok():
+                c5_opt_delimiters_var.set(entry.get().strip())
+                d.destroy()
+            br = ctk.CTkFrame(d, fg_color="transparent")
+            br.pack(pady=8)
+            _btn(br, "확인", _ok, w=80, h=30, small=True).pack(side="left", padx=4)
+            _btn(br, "취소", d.destroy, w=80, h=30, small=True,
+                 color=C["subtext"]).pack(side="left", padx=4)
+
+        opt_row0 = ctk.CTkFrame(c5_opt_frame, fg_color="transparent")
+        opt_row0.pack(fill="x", padx=14, pady=(10, 4))
+        _btn(opt_row0, "구분 기준", _open_delimiters_dlg, w=90, h=28, small=True).pack(side="left", padx=(0, 8))
+        _lbl(opt_row0, "미설정 시 . ! ? 기준 / 설정 시 해당 단어 기준",
+             font=F_SM, color=C["subtext"]).pack(side="left")
+
+        # 1행: 1.포스팅 수집수 | 2.앞뒤 문단 빼기 | 3.단락 구분
+        opt_row1 = ctk.CTkFrame(c5_opt_frame, fg_color="transparent")
+        opt_row1.pack(fill="x", padx=14, pady=(10, 6))
+        _lbl(opt_row1, "1. 수집수", font=F_SM, color=C["subtext"]).pack(side="left", padx=(0, 6))
+        _opt_entry(opt_row1, c5_opt_count_var, w=52)
+        _lbl(opt_row1, "개", font=F_SM, color=C["subtext"]).pack(side="left")
+        _div(opt_row1)
+        _lbl(opt_row1, "2. 앞뒤 문단 빼기", font=F_SM, color=C["subtext"]).pack(side="left", padx=(0, 6))
+        _opt_entry(opt_row1, c5_opt_skip_var, w=52)
+        _lbl(opt_row1, "개 ( 0=끄기 )", font=F_SM, color=C["subtext"]).pack(side="left")
+        _div(opt_row1)
+        _lbl(opt_row1, "3. 단락 구분", font=F_SM, color=C["subtext"]).pack(side="left", padx=(0, 6))
+        _opt_entry(opt_row1, c5_opt_chunk_var, w=68)
+        _lbl(opt_row1, "( 예: 2~4 / 0=끄기 )", font=F_SM, color=C["subtext"]).pack(side="left")
+
+        # 2행: 4.글자수 제한 | 5.참조 헤더 | 6.참조 바텀
+        opt_row2 = ctk.CTkFrame(c5_opt_frame, fg_color="transparent")
+        opt_row2.pack(fill="x", padx=14, pady=(0, 4))
+        _lbl(opt_row2, "4. 글자수 제한", font=F_SM, color=C["subtext"]).pack(side="left", padx=(0, 6))
+        _opt_entry(opt_row2, c5_opt_maxch_var, w=72)
+        _lbl(opt_row2, "자 ( 0=끄기 )", font=F_SM, color=C["subtext"]).pack(side="left")
+        _div(opt_row2)
+        _lbl(opt_row2, "5. 참조 헤더", font=F_SM, color=C["subtext"]).pack(side="left", padx=(0, 6))
+        _opt_entry(opt_row2, c5_opt_header_var, w=120)
+        _div(opt_row2)
+        _lbl(opt_row2, "6. 참조 바텀", font=F_SM, color=C["subtext"]).pack(side="left", padx=(0, 6))
+        _opt_entry(opt_row2, c5_opt_bottom_var, w=160)
+
+        # 3행: 7.맨끝 문구
+        opt_row4 = ctk.CTkFrame(c5_opt_frame, fg_color="transparent")
+        opt_row4.pack(fill="x", padx=14, pady=(0, 12))
+        _lbl(opt_row4, "7. 맨끝 문구(업체 입력시)", font=F_SM, color=C["subtext"]).pack(side="left", padx=(0, 6))
+        _opt_entry(opt_row4, c5_opt_ending_var, w=300)
+
+        # ── 테스트 영역 (상단) ────────────────────────────
+        c5_top = ctk.CTkFrame(tab5_content, fg_color="transparent")
+        c5_top.pack(fill="x", pady=(0, 6))
+        _lbl(c5_top, "키워드", font=F_SMB, color=C["subtext"]).pack(side="left", padx=(0, 8))
+        c5_kw_entry = ctk.CTkEntry(
+            c5_top, height=32, font=F,
+            fg_color=C["input_bg"], border_color=C["border"],
+            text_color=C["text"], corner_radius=7,
+        )
+        c5_kw_entry.pack(side="left", fill="x", expand=True, padx=(0, 8))
+        c5_status = _lbl(c5_top, "", font=F_SM, color=C["subtext"])
+        c5_status.pack(side="left", padx=(0, 8))
+
+        c5_result = ctk.CTkTextbox(
+            tab5_content, font=F_SM,
+            fg_color=C["input_bg"], border_color=C["border"],
+            text_color=C["text"], corner_radius=8, border_width=1,
+            wrap="word", state="disabled",
+        )
+        c5_result.pack(fill="both", expand=True)
+
+        def _c5_collect():
+            kw = c5_kw_entry.get().strip()
+            if not kw:
+                c5_status.configure(text="키워드를 입력하세요.", text_color=C["err"])
+                return
+            try:
+                cnt  = int(c5_opt_count_var.get())
+                skip = int(c5_opt_skip_var.get())
+            except ValueError:
+                cnt, skip = 5, 0
+            c5_status.configure(text="🔄 수집 중...", text_color=C["accent"])
+            c5_result.configure(state="normal")
+            c5_result.delete("1.0", "end")
+            c5_result.insert("1.0", "수집 중...\n")
+            c5_result.configure(state="disabled")
+            c5_collect_btn.configure(state="disabled")
+
+            def _run():
+                try:
+                    def _prog(done, total):
+                        dlg.after(0, lambda d=done, t=total:
+                            c5_status.configure(text=f"🔄 {d}/{t} 수집 중...", text_color=C["accent"]))
+                    chunk = c5_opt_chunk_var.get().strip() or "0"
+                    try: maxch = int(c5_opt_maxch_var.get())
+                    except Exception: maxch = 0
+                    dlims = [x.strip() for x in c5_opt_delimiters_var.get().split(';') if x.strip()] or None
+                    results = _nc.collect(kw, cnt, skip=skip, chunk_range=chunk,
+                                          maxchars=maxch, delimiters=dlims, progress_cb=_prog)
+                    lines = [c5_opt_header_var.get().strip() or "[인기글 참조]"]
+                    for _title, text, _url in results:
+                        lines.append(f"\n{text}")
+                    if bottom := c5_opt_bottom_var.get().strip():
+                        lines.append(f"\n{bottom}")
+                    output = "\n".join(lines) if results else "결과 없음"
+
+                    def _done():
+                        c5_result.configure(state="normal")
+                        c5_result.delete("1.0", "end")
+                        c5_result.insert("1.0", output)
+                        c5_result.configure(state="disabled")
+                        c5_status.configure(text=f"✅ {len(results)}개 수집 완료", text_color=C["ok"])
+                        c5_collect_btn.configure(state="normal")
+                    dlg.after(0, _done)
+                except Exception as e:
+                    def _err(msg=str(e)):
+                        c5_result.configure(state="normal")
+                        c5_result.delete("1.0", "end")
+                        c5_result.insert("1.0", f"오류: {msg}")
+                        c5_result.configure(state="disabled")
+                        c5_status.configure(text="❌ 오류", text_color=C["err"])
+                        c5_collect_btn.configure(state="normal")
+                    dlg.after(0, _err)
+
+            _threading.Thread(target=_run, daemon=True).start()
+
+        c5_collect_btn = _btn(c5_top, "수집", _c5_collect, w=70, h=32)
+        c5_collect_btn.pack(side="left")
+
         # ── 탭1을 기본으로 표시 ───────────────────────────
-        _show_tab(1)
+        def _do_save():
+            n = active_tab[0]
+            if n in (1, 2):   _save()
+            elif n == 3:      _save_mac()
+            elif n == 4:      _save_topics()
+            elif n == 5:      _c5_save_opts()
 
         # ── 하단 버튼 내용 채우기 ─────────────────────────
         save_notify = ctk.CTkLabel(btn_row, text="", font=F_SM, text_color=C["ok"])
@@ -3199,13 +3499,26 @@ Remove-Item -Path (Split-Path $log) -Recurse -Force -ErrorAction SilentlyContinu
             working2[cur_idx[0]]        = txt2.get("1.0", "end").strip()
             working_kw2[cur_idx[0]]     = kw2_var.get()
             working_topic[cur_idx[0]]   = topic_var.get()
+            working_collect[cur_idx[0]] = collect_var.get()
             working_enabled[cur_idx[0]] = enabled_var.get()
             self._prompts             = list(working)
             self._prompts2            = list(working2)
             self._kw2_enabled         = list(working_kw2)
             self._topic_enabled       = list(working_topic)
+            self._collect_enabled     = list(working_collect)
             self._option_enabled      = list(working_enabled)
             self._prompt_names        = list(working_names)
+            try: self._collect_count    = int(c5_opt_count_var.get())
+            except Exception: pass
+            try: self._collect_skip     = int(c5_opt_skip_var.get())
+            except Exception: pass
+            self._collect_chunk         = c5_opt_chunk_var.get().strip() or "0"
+            try: self._collect_maxchars = int(c5_opt_maxch_var.get())
+            except Exception: pass
+            self._collect_header        = c5_opt_header_var.get().strip() or "[인기글 참조]"
+            self._collect_delimiters    = c5_opt_delimiters_var.get().strip()
+            self._collect_ending        = c5_opt_ending_var.get().strip()
+            self._collect_bottom        = c5_opt_bottom_var.get().strip()
             self._selected_prompt_idx = cur_idx[0]
             self._var_settings        = {k: v for k, v in w_var.items()}
             try:
@@ -3243,13 +3556,11 @@ Remove-Item -Path (Split-Path $log) -Recurse -Force -ErrorAction SilentlyContinu
                 txt2.delete("1.0", "end")
                 _refresh_txt2()
 
-        _btn(btn_row, "저장", _save, w=100, h=34).pack(side="right", padx=(6, 0))
-        ctk.CTkButton(
-            btn_row, text="초기화", command=_clear,
-            width=90, height=34, font=F_SM,
-            fg_color=C["accent_bg"], hover_color=C["border"],
-            text_color=C["subtext"], corner_radius=8,
-        ).pack(side="right")
+        _save_btn = _btn(btn_row, "저장", _do_save, w=100, h=34)
+        _save_btn.pack(side="right", padx=(6, 0))
+        _clear_btn_ref[0] = _btn(btn_row, "초기화", _clear, w=80, h=34,
+                                 color=C["subtext"], hover=C["text"])
+        _show_tab(1)
 
         # ── 원격 프롬프트 동기화 내용 채우기 ──────────────
         sync_top = ctk.CTkFrame(sync_area, fg_color="transparent")
@@ -3304,9 +3615,15 @@ Remove-Item -Path (Split-Path $log) -Recurse -Force -ErrorAction SilentlyContinu
                 "prompts":        list(self._prompts),
                 "prompts2":       list(self._prompts2),
                 "kw2_enabled":    list(self._kw2_enabled),
-                "option_enabled": list(self._option_enabled),
-                "topic_enabled":  list(self._topic_enabled),
-                "topic_lists":    dict(self._topic_lists),
+                "option_enabled":   list(self._option_enabled),
+                "topic_enabled":    list(self._topic_enabled),
+                "collect_enabled":  list(self._collect_enabled),
+                "collect_count":    self._collect_count,
+                "collect_skip":     self._collect_skip,
+                "collect_chunk":    self._collect_chunk,
+                "collect_maxchars": self._collect_maxchars,
+                "collect_header":   self._collect_header,
+                "topic_lists":      dict(self._topic_lists),
                 "var_settings":   {k: v for k, v in self._var_settings.items()},
                 "max_width":      self._max_width,
                 "mac_entries":    list(self._mac_entries),
@@ -3327,6 +3644,26 @@ Remove-Item -Path (Split-Path $log) -Recurse -Force -ErrorAction SilentlyContinu
         ).pack(side="left", padx=(6, 0))
 
         dlg.after(50, lambda: dlg.wm_attributes("-alpha", 1))
+
+    def _collect_reference(self, kw: str) -> str:
+        """인기글 수집 후 참조 블록 반환. 실패 시 빈 문자열."""
+        import naver_collector as _nc
+        try:
+            dlims = [x.strip() for x in self._collect_delimiters.split(';') if x.strip()] or None
+            results = _nc.collect(kw, self._collect_count, self._collect_skip,
+                                  chunk_range=self._collect_chunk,
+                                  maxchars=self._collect_maxchars,
+                                  delimiters=dlims)
+            if not results:
+                return ""
+            lines = [self._collect_header]
+            for _title, text, _url in results:
+                lines.append(f"\n{text}")
+            if self._collect_bottom:
+                lines.append(f"\n{self._collect_bottom}")
+            return "\n".join(lines)
+        except Exception:
+            return ""
 
     def _gen_all(self, kw, kw2, count):
         self._start_timer()
@@ -3361,13 +3698,28 @@ Remove-Item -Path (Split-Path $log) -Recurse -Force -ErrorAction SilentlyContinu
                     stored = self._topic_lists.get(kw, [])
                     if stored:
                         effective_kw = f"{kw} 전문 블로거가 쓸는 {random.choice(stored)}"
-                parts = [effective_kw]
+                parts = []
+                if self._collect_enabled[idx]:
+                    self._set_text_status("인기글 수집 중...", 0.05)
+                    ref = self._collect_reference(kw)  # 헤더 + 수집글 + 바텀 포함
+                    if ref:
+                        parts.append(ref)
+                parts.append(effective_kw)
                 if self._prompts[idx]:
                     parts.append(self._prompts[idx])
-                if kw2:
-                    parts.append(kw2)
-                if self._kw2_enabled[idx] and self._prompts2[idx]:
-                    parts.append(self._prompts2[idx])
+                if self._collect_enabled[idx]:
+                    # 인기글 모드: 업체명을 프롬포트 맨 끝에
+                    if kw2:
+                        parts.append(kw2)
+                        if self._collect_ending:
+                            parts.append(self._collect_ending)
+                else:
+                    # 일반 주제 모드
+                    if kw2:
+                        parts.append(kw2)
+                    if self._kw2_enabled[idx] and self._prompts2[idx]:
+                        parts.append(self._prompts2[idx])
+                self._set_text_status("생성 중...", 0.2)
                 for _attempt in range(2):
                     try:
                         result = content_generator.generate("\n".join(parts), "", cancel_event=self._stop_event)
@@ -3425,13 +3777,29 @@ Remove-Item -Path (Split-Path $log) -Recurse -Force -ErrorAction SilentlyContinu
                 stored = self._topic_lists.get(kw, [])
                 if stored:
                     effective_kw = f"{kw} 전문 블로거가 쓸는 {random.choice(stored)}"
-            parts = [effective_kw]
+            parts = []
+            if self._collect_enabled[idx]:
+                self._set_text_status("인기글 수집 중...", 0.05)
+                self._set_status("🔄  인기글 수집 중...", color=C["accent"])
+                ref = self._collect_reference(kw)  # 헤더 + 수집글 + 바텀 포함
+                if ref:
+                    parts.append(ref)
+            parts.append(effective_kw)
             if self._prompts[idx]:
                 parts.append(self._prompts[idx])
-            if kw2:
-                parts.append(kw2)
-            if self._kw2_enabled[idx] and self._prompts2[idx]:
-                parts.append(self._prompts2[idx])
+            if self._collect_enabled[idx]:
+                # 인기글 모드: 업체명을 프롬포트 맨 끝에
+                if kw2:
+                    parts.append(kw2)
+                    if self._collect_ending:
+                        parts.append(self._collect_ending)
+            else:
+                # 일반 주제 모드
+                if kw2:
+                    parts.append(kw2)
+                if self._kw2_enabled[idx] and self._prompts2[idx]:
+                    parts.append(self._prompts2[idx])
+            self._set_text_status("생성 중...", 0.2)
             for _attempt in range(2):
                 try:
                     result = content_generator.generate("\n".join(parts), "", cancel_event=self._stop_event)

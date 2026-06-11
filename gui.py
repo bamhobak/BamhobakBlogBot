@@ -49,7 +49,7 @@ ctk.set_default_color_theme("blue")
 
 _BASE_DIR = Path(sys.executable).parent if getattr(sys, "frozen", False) else Path(__file__).parent
 ENV_PATH = _BASE_DIR / ".env"
-APP_VERSION = "v1.6.18"
+APP_VERSION = "v1.6.20"
 APP_TITLE   = f"Bamhobak Blog Bot {APP_VERSION}"
 
 _DEFAULT_GITHUB_TOKEN  = ""
@@ -409,13 +409,13 @@ class App(ctk.CTk):
         self._img_pil    = []
         self._last_body  = ""
         self._stop_event = threading.Event()
-        self._prompts    = [""] * 10
-        self._prompts2   = [""] * 10
-        self._kw2_enabled = [False] * 10
-        self._option_enabled = [True] * 10
-        self._topic_enabled = [False] * 10
+        self._prompts    = [""] * 15
+        self._prompts2   = [""] * 15
+        self._kw2_enabled = [False] * 15
+        self._option_enabled = [True] * 15
+        self._topic_enabled = [False] * 15
         self._topic_lists = {}
-        self._prompt_names = [f"옵션 {i+1}" for i in range(10)]
+        self._prompt_names = [f"옵션 {i+1}" for i in range(15)]
         self._selected_prompt_idx = 0
         self._remote_url = _DEFAULT_GIST_URL
         self._local_img_folder = ""
@@ -534,25 +534,25 @@ class App(ctk.CTk):
             self.img_count_entry.insert(0, cnt)
         if saved_prompts := self._prefs.get("prompts"):
             if isinstance(saved_prompts, list):
-                for i, p in enumerate(saved_prompts[:10]):
+                for i, p in enumerate(saved_prompts[:15]):
                     self._prompts[i] = p or ""
         elif cp := self._prefs.get("custom_prompt"):
             self._prompts[0] = cp
         if saved_p2 := self._prefs.get("prompts2"):
             if isinstance(saved_p2, list):
-                for i, p in enumerate(saved_p2[:10]):
+                for i, p in enumerate(saved_p2[:15]):
                     self._prompts2[i] = p or ""
         if saved_kw2 := self._prefs.get("kw2_enabled"):
             if isinstance(saved_kw2, list):
-                for i, v in enumerate(saved_kw2[:10]):
+                for i, v in enumerate(saved_kw2[:15]):
                     self._kw2_enabled[i] = bool(v)
         if saved_oe := self._prefs.get("option_enabled"):
             if isinstance(saved_oe, list):
-                for i, v in enumerate(saved_oe[:10]):
+                for i, v in enumerate(saved_oe[:15]):
                     self._option_enabled[i] = bool(v)
         if saved_te := self._prefs.get("topic_enabled"):
             if isinstance(saved_te, list):
-                for i, v in enumerate(saved_te[:10]):
+                for i, v in enumerate(saved_te[:15]):
                     self._topic_enabled[i] = bool(v)
         if tl := self._prefs.get("topic_lists"):
             if isinstance(tl, dict):
@@ -561,10 +561,10 @@ class App(ctk.CTk):
                         self._topic_lists[str(k)] = [str(t) for t in v if t]
         if saved_names := self._prefs.get("prompt_names"):
             if isinstance(saved_names, list):
-                for i, n in enumerate(saved_names[:10]):
+                for i, n in enumerate(saved_names[:15]):
                     self._prompt_names[i] = n or f"옵션 {i+1}"
         idx = self._prefs.get("selected_prompt_idx", 0)
-        self._selected_prompt_idx = max(0, min(9, int(idx)))
+        self._selected_prompt_idx = max(0, min(14, int(idx)))
         if folder := self._prefs.get("local_img_folder"):
             self._local_img_folder = folder
         if outdir := self._prefs.get("variation_output_dir"):
@@ -820,23 +820,23 @@ class App(ctk.CTk):
     def _apply_remote_data(self, data: dict):
         if p := data.get("prompts"):
             if isinstance(p, list):
-                for i, v in enumerate(p[:10]):
+                for i, v in enumerate(p[:15]):
                     self._prompts[i] = v or ""
         if p2 := data.get("prompts2"):
             if isinstance(p2, list):
-                for i, v in enumerate(p2[:10]):
+                for i, v in enumerate(p2[:15]):
                     self._prompts2[i] = v or ""
         if kw2 := data.get("kw2_enabled"):
             if isinstance(kw2, list):
-                for i, v in enumerate(kw2[:10]):
+                for i, v in enumerate(kw2[:15]):
                     self._kw2_enabled[i] = bool(v)
         if oe := data.get("option_enabled"):
             if isinstance(oe, list):
-                for i, v in enumerate(oe[:10]):
+                for i, v in enumerate(oe[:15]):
                     self._option_enabled[i] = bool(v)
         if te := data.get("topic_enabled"):
             if isinstance(te, list):
-                for i, v in enumerate(te[:10]):
+                for i, v in enumerate(te[:15]):
                     self._topic_enabled[i] = bool(v)
         if tl := data.get("topic_lists"):
             if isinstance(tl, dict):
@@ -845,7 +845,7 @@ class App(ctk.CTk):
                         self._topic_lists[str(k)] = [str(t) for t in v if t]
         if names := data.get("prompt_names"):
             if isinstance(names, list):
-                for i, n in enumerate(names[:10]):
+                for i, n in enumerate(names[:15]):
                     self._prompt_names[i] = n or f"옵션 {i+1}"
         if vs := data.get("var_settings"):
             if isinstance(vs, dict):
@@ -2047,7 +2047,7 @@ class App(ctk.CTk):
 
     def _rebuild_selector(self):
         """활성화된 옵션만 드롭다운에 표시."""
-        enabled_names = [self._prompt_names[i] for i in range(10) if self._option_enabled[i]]
+        enabled_names = [self._prompt_names[i] for i in range(15) if self._option_enabled[i]]
         if not enabled_names:
             self._option_enabled[0] = True
             enabled_names = [self._prompt_names[0]]
@@ -2437,7 +2437,7 @@ Remove-Item -Path (Split-Path $log) -Recurse -Force -ErrorAction SilentlyContinu
 
         # ── 탭1 내용: 프롬프트 옵션 ──────────────────────
         left = ctk.CTkScrollableFrame(
-            tab1_content, width=120, fg_color=C["accent_bg"], corner_radius=8,
+            tab1_content, width=138, fg_color=C["accent_bg"], corner_radius=8,
             scrollbar_button_color=C["border"],
         )
         left.pack(side="left", fill="y", padx=(0, 10))
@@ -2571,24 +2571,119 @@ Remove-Item -Path (Split-Path $log) -Recurse -Force -ErrorAction SilentlyContinu
             _refresh_txt2()
 
         opt_btns = []
-        for i in range(10):
-            is_on = working_enabled[i]
-            has   = working[i] or working2[i]
-            b = ctk.CTkButton(
-                left,
-                text=_btn_label(i),
-                command=lambda idx=i: _switch_to(idx),
-                width=108, height=30,
-                font=F_SM,
-                fg_color=C["accent"] if i == cur_idx[0] else "transparent",
-                hover_color="#D4DCF5",
-                text_color="white" if i == cur_idx[0]
-                           else ((C["accent"] if has else C["subtext"]) if is_on else "#AAAAAA"),
-                corner_radius=6,
-                anchor="w",
-            )
-            b.pack(padx=4, pady=2)
-            opt_btns.append(b)
+        opt_rows = []
+        opt_drag = {"idx": None, "start_y": 0}
+
+        def _get_opt_drop_idx(y_root):
+            for i, row_w in enumerate(opt_rows):
+                try:
+                    if y_root < row_w.winfo_rooty() + row_w.winfo_height() // 2:
+                        return i
+                except Exception:
+                    pass
+            return len(opt_rows)
+
+        def _on_opt_drag_start(event, idx):
+            opt_drag["idx"] = idx
+            opt_drag["start_y"] = event.y_root
+
+        def _on_opt_drag_motion(event):
+            if opt_drag["idx"] is None:
+                return
+            dst = min(_get_opt_drop_idx(event.y_root), len(opt_rows) - 1)
+            for i, row_w in enumerate(opt_rows):
+                try:
+                    row_w.configure(fg_color=C["accent_bg"] if i == dst else "transparent")
+                except Exception:
+                    pass
+
+        def _on_opt_drag_end(event):
+            if opt_drag["idx"] is None:
+                return
+            for row_w in opt_rows:
+                try:
+                    row_w.configure(fg_color="transparent")
+                except Exception:
+                    pass
+            moved = abs(event.y_root - opt_drag["start_y"]) > 5
+            src_idx = opt_drag["idx"]
+            opt_drag["idx"] = None
+            if not moved:
+                return
+            dst_idx = _get_opt_drop_idx(event.y_root)
+            if dst_idx > src_idx:
+                dst_idx -= 1
+            if src_idx == dst_idx:
+                return
+            ci = cur_idx[0]
+            working_names[ci]   = name_entry.get().strip() or f"옵션 {ci+1}"
+            working[ci]         = txt1.get("1.0", "end").strip()
+            working2[ci]        = txt2.get("1.0", "end").strip()
+            working_kw2[ci]     = kw2_var.get()
+            working_topic[ci]   = topic_var.get()
+            working_enabled[ci] = enabled_var.get()
+            for arr in [working, working2, working_names, working_enabled, working_kw2, working_topic]:
+                arr.insert(dst_idx, arr.pop(src_idx))
+            if ci == src_idx:
+                cur_idx[0] = dst_idx
+            elif src_idx < ci <= dst_idx:
+                cur_idx[0] = ci - 1
+            elif dst_idx <= ci < src_idx:
+                cur_idx[0] = ci + 1
+            _rebuild_opt_list()
+            idx = cur_idx[0]
+            name_entry.delete(0, "end")
+            name_entry.insert(0, working_names[idx])
+            enabled_var.set(working_enabled[idx])
+            kw2_var.set(working_kw2[idx])
+            topic_var.set(working_topic[idx])
+            txt1.delete("1.0", "end")
+            if working[idx]:
+                txt1.insert("1.0", working[idx])
+            txt2.configure(state="normal")
+            txt2.delete("1.0", "end")
+            if working2[idx]:
+                txt2.insert("1.0", working2[idx])
+            _refresh_txt2()
+
+        def _rebuild_opt_list():
+            for r in opt_rows:
+                r.destroy()
+            opt_rows.clear()
+            opt_btns.clear()
+            for i in range(15):
+                is_on = working_enabled[i]
+                has   = working[i] or working2[i]
+                row = ctk.CTkFrame(left, fg_color="transparent", corner_radius=6)
+                row.pack(padx=2, pady=2, fill="x")
+                handle = tk.Label(
+                    row, text="⠿",
+                    bg=C["accent_bg"], fg=C["subtext"],
+                    font=("Malgun Gothic", 11),
+                    cursor="fleur", padx=2,
+                )
+                handle.pack(side="left")
+                handle.bind("<Button-1>",        lambda e, n=i: _on_opt_drag_start(e, n))
+                handle.bind("<B1-Motion>",       _on_opt_drag_motion)
+                handle.bind("<ButtonRelease-1>", _on_opt_drag_end)
+                b = ctk.CTkButton(
+                    row,
+                    text=_btn_label(i),
+                    command=lambda n=i: _switch_to(n),
+                    height=30,
+                    font=F_SM,
+                    fg_color=C["accent"] if i == cur_idx[0] else "transparent",
+                    hover_color="#D4DCF5",
+                    text_color="white" if i == cur_idx[0]
+                               else ((C["accent"] if has else C["subtext"]) if is_on else "#AAAAAA"),
+                    corner_radius=6,
+                    anchor="w",
+                )
+                b.pack(side="left", fill="x", expand=True)
+                opt_btns.append(b)
+                opt_rows.append(row)
+
+        _rebuild_opt_list()
 
         _refresh_txt2()
         if working[cur_idx[0]]:

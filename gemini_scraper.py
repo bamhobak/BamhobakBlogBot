@@ -382,12 +382,24 @@ def _html_to_markdown(html: str) -> str:
                 self._reset_ol_seq()
                 self._bq_depth += 1
             elif t in ('ul', 'ol'):
-                self._reset_ol_seq()
-                self._list_type_stack.append('ul')  # ol도 ul과 동일하게 처리
-                self._ol_counters.append(0)
+                self._list_type_stack.append(t)
+                if t == 'ol':
+                    # start 속성 직접 읽기 (없으면 1)
+                    try:
+                        start_val = int(next((v for k, v in attrs if k == 'start'), 1))
+                    except (ValueError, TypeError):
+                        start_val = 1
+                    self._ol_counters.append(start_val - 1)  # li에서 +1하므로 -1
+                else:
+                    self._ol_counters.append(0)
+                    self._reset_ol_seq()
             elif t == 'li':
                 self._li_depth += 1
-                self.out.append('\n- ')
+                if self._in_ol():
+                    self._ol_counters[-1] += 1
+                    self.out.append(f'\n{self._ol_counters[-1]}. ')
+                else:
+                    self.out.append('\n- ')
             elif t == 'p':
                 if self._in_bq():
                     self.out.append('\n> ')
@@ -415,8 +427,13 @@ def _html_to_markdown(html: str) -> str:
                 self.out.append('\n')
             elif t in ('ul', 'ol'):
                 if self._list_type_stack:
-                    self._list_type_stack.pop()
-                    self._ol_counters.pop()
+                    closed_type = self._list_type_stack.pop()
+                    if self._ol_counters:
+                        if closed_type == 'ol':
+                            self._prev_ol_counter = self._ol_counters[-1]
+                        else:
+                            self._prev_ol_counter = 0
+                        self._ol_counters.pop()
                 self.out.append('\n')
             elif t == 'li':
                 self._li_depth = max(0, self._li_depth - 1)

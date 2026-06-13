@@ -50,7 +50,7 @@ ctk.set_default_color_theme("blue")
 
 _BASE_DIR = Path(sys.executable).parent if getattr(sys, "frozen", False) else Path(__file__).parent
 ENV_PATH = _BASE_DIR / ".env"
-APP_VERSION = "v1.7.37"
+APP_VERSION = "v1.7.38"
 APP_TITLE   = f"Bamhobak Blog Bot {APP_VERSION}"
 
 _DEFAULT_GITHUB_TOKEN  = ""
@@ -1194,6 +1194,16 @@ class App(ctk.CTk):
                 for k in self._var_settings:
                     if k in vs:
                         self._var_settings[k] = float(vs[k])
+        if vsp := data.get("var_settings_picsum"):
+            if isinstance(vsp, dict):
+                for k in self._var_settings_picsum:
+                    if k in vsp:
+                        self._var_settings_picsum[k] = float(vsp[k])
+        if vsf := data.get("var_settings_flickr"):
+            if isinstance(vsf, dict):
+                for k in self._var_settings_flickr:
+                    if k in vsf:
+                        self._var_settings_flickr[k] = float(vsf[k])
         if mw := data.get("max_width"):
             try:
                 self._max_width = int(mw)
@@ -4377,7 +4387,9 @@ Remove-Item -Path (Split-Path $log) -Recurse -Force -ErrorAction SilentlyContinu
                 "collect_maxchars": self._collect_maxchars,
                 "collect_header":   self._collect_header,
                 "topic_lists":      dict(self._topic_lists),
-                "var_settings":   {k: v for k, v in self._var_settings.items()},
+                "var_settings":        {k: v for k, v in self._var_settings.items()},
+                "var_settings_picsum": {k: v for k, v in self._var_settings_picsum.items()},
+                "var_settings_flickr": {k: v for k, v in self._var_settings_flickr.items()},
                 "max_width":      self._max_width,
                 "mac_entries":    list(self._mac_entries),
             }

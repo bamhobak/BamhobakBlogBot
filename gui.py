@@ -50,7 +50,7 @@ ctk.set_default_color_theme("blue")
 
 _BASE_DIR = Path(sys.executable).parent if getattr(sys, "frozen", False) else Path(__file__).parent
 ENV_PATH = _BASE_DIR / ".env"
-APP_VERSION = "v1.7.38"
+APP_VERSION = "v1.7.39"
 APP_TITLE   = f"Bamhobak Blog Bot {APP_VERSION}"
 
 _DEFAULT_GITHUB_TOKEN  = ""
@@ -1185,6 +1185,12 @@ class App(ctk.CTk):
                 for k, v in tl.items():
                     if isinstance(v, list):
                         self._topic_lists[str(k)] = [str(t) for t in v if t]
+        if tr := data.get("topic_rows"):
+            if isinstance(tr, list):
+                self._topic_rows = [
+                    [str(k) for k in row if k]
+                    for row in tr if isinstance(row, list)
+                ]
         if names := data.get("prompt_names"):
             if isinstance(names, list):
                 for i, n in enumerate(names[:15]):
@@ -4387,6 +4393,7 @@ Remove-Item -Path (Split-Path $log) -Recurse -Force -ErrorAction SilentlyContinu
                 "collect_maxchars": self._collect_maxchars,
                 "collect_header":   self._collect_header,
                 "topic_lists":      dict(self._topic_lists),
+                "topic_rows":       [list(r) for r in self._topic_rows],
                 "var_settings":        {k: v for k, v in self._var_settings.items()},
                 "var_settings_picsum": {k: v for k, v in self._var_settings_picsum.items()},
                 "var_settings_flickr": {k: v for k, v in self._var_settings_flickr.items()},

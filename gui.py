@@ -50,14 +50,14 @@ ctk.set_default_color_theme("blue")
 
 _BASE_DIR = Path(sys.executable).parent if getattr(sys, "frozen", False) else Path(__file__).parent
 ENV_PATH = _BASE_DIR / ".env"
-APP_VERSION = "v1.7.39"
+APP_VERSION = "v1.8.52"
 APP_TITLE   = f"Bamhobak Blog Bot {APP_VERSION}"
 
 _DEFAULT_GITHUB_TOKEN  = ""
 _DEFAULT_GIST_URL      = "https://gist.githubusercontent.com/bamhobak/2550df522ba15e6fbd6ea353144253fe/raw/prompts.json"
 _DEFAULT_UPDATE_CHECK_URL = "https://api.github.com/gists/2550df522ba15e6fbd6ea353144253fe"
 _DEFAULT_GITHUB_REPO   = "bamhobak/BamhobakBlogBot"
-_DEFAULT_CF_ACCOUNT_ID = ""
+_DEFAULT_CF_ACCOUNT_ID = "cb255eaa4a45f4bf2ec980beb268f769"
 _DEFAULT_CF_API_TOKEN  = ""
 
 
@@ -311,92 +311,56 @@ def _urlopen_ssl(req, timeout=15):
         raise
 
 
-class LoopyScrollbar(tk.Canvas):
-    """루피 이미지를 사용하는 커스텀 수평 스크롤바"""
-    _img = None
-    _img_w = 0
-    H = 26
-
+class LoopyScrollbar(tk.Scrollbar):
+    """일반 수평 스크롤바 (기존 enable 인터페이스 호환)"""
     def __init__(self, parent, **kw):
-        super().__init__(parent, height=self.H,
-                         bg=C["card"], highlightthickness=0, bd=0, **kw)
-        self._command  = None
-        self._first    = 0.0
-        self._last     = 1.0
-        self._drag_x   = None
-        self._drag_f   = None
-        self._enabled  = False  # 이미지 생성 완료 후에만 표시
-
-        if LoopyScrollbar._img is None:
-            LoopyScrollbar._load()
-
-        self.bind("<Configure>",        lambda e: self._redraw())
-        self.bind("<Button-1>",         self._press)
-        self.bind("<B1-Motion>",        self._drag)
-        self.bind("<ButtonRelease-1>",  self._release)
-
-    @classmethod
-    def _load(cls):
-        try:
-            from PIL import ImageTk as _ITk
-            img = Image.open(_BASE_DIR / "loopy.png").convert("RGBA")
-            ratio = cls.H / img.height
-            new_w = max(1, int(img.width * ratio))
-            img = img.resize((new_w, cls.H), Image.LANCZOS)
-            cls._img   = _ITk.PhotoImage(img)
-            cls._img_w = new_w
-        except Exception:
-            pass
-
-    def configure(self, **kw):
-        if "command" in kw:
-            self._command = kw.pop("command")
-        if kw:
-            super().configure(**kw)
-
-    def set(self, first, last):
-        self._first = float(first)
-        self._last  = float(last)
-        self._redraw()
+        super().__init__(parent, orient="horizontal", **kw)
 
     def enable(self, on=True):
-        self._enabled = on
-        self._redraw()
+        pass  # 표준 스크롤바는 xscrollcommand로 자동 제어됨
 
-    def _redraw(self):
-        self.delete("all")
-        if not LoopyScrollbar._img or not self._enabled:
-            return
-        # 스크롤 불필요(전체 내용 보임) → 루피 숨김
-        if self._last - self._first >= 0.999:
-            return
-        w = self.winfo_width()
-        if w <= 1:
-            return
-        max_x    = max(0, w - LoopyScrollbar._img_w)
-        span     = self._last - self._first
-        movable  = max(1e-9, 1.0 - span)
-        x = int((self._first / movable) * max_x)
-        self.create_image(x, 0, anchor="nw", image=LoopyScrollbar._img)
 
-    def _press(self, e):
-        self._drag_x = e.x
-        self._drag_f = self._first
+class _UndoEntry(ctk.CTkEntry):
+    """Ctrl+Z undo를 지원하는 CTkEntry (단어 단위 히스토리)."""
 
-    def _drag(self, e):
-        if self._drag_x is None or not self._command:
+    def __init__(self, master, **kwargs):
+        super().__init__(master, **kwargs)
+        self._undo_stack: list = []
+        self._prev_val: str = ""
+        self._after_id = None
+        self._entry.bind("<KeyRelease>", self._on_key, add="+")
+        self._entry.bind("<Control-z>", self._do_undo, add="+")
+        self._entry.bind("<Control-Z>", self._do_undo, add="+")
+
+    def _checkpoint(self):
+        val = self.get()
+        if val != self._prev_val:
+            self._undo_stack.append(self._prev_val)
+            if len(self._undo_stack) > 1:
+                self._undo_stack.pop(0)
+            self._prev_val = val
+
+    def _on_key(self, event):
+        if event.state & 0x4:  # Ctrl 조합키 무시
             return
-        w      = self.winfo_width()
-        lw     = LoopyScrollbar._img_w or 1
-        max_x  = max(1, w - lw)
-        span   = self._last - self._first
-        movable = max(1e-9, 1.0 - span)
-        new_f  = max(0.0, min(1.0 - span, self._drag_f + (e.x - self._drag_x) / max_x * movable))
-        self._command("moveto", new_f)
+        val = self.get()
+        if event.keysym == "space" or abs(len(val) - len(self._prev_val)) >= 5:
+            self._checkpoint()
+        else:
+            if self._after_id:
+                self.after_cancel(self._after_id)
+            self._after_id = self.after(1200, self._checkpoint)
 
-    def _release(self, e):
-        self._drag_x = None
-        self._drag_f = None
+    def _do_undo(self, event):
+        cur = self.get()
+        if cur != self._prev_val:
+            self._undo_stack.append(cur)
+        if self._undo_stack:
+            val = self._undo_stack.pop()
+            self._prev_val = val
+            self.delete(0, "end")
+            self.insert(0, val)
+        return "break"
 
 
 class _TopicPicker(ctk.CTkFrame):
@@ -578,6 +542,7 @@ class App(ctk.CTk):
         self._selected_prompt_idx = 0
         self._kw_per_option: list = [""] * 15
         self._kw2_per_option: list = [""] * 15
+        self._collect_kw_per_option: list = [""] * 15
         self._remote_url = _DEFAULT_GIST_URL
         self._local_img_folder = ""
         self._variation_output_dir = ""
@@ -586,6 +551,8 @@ class App(ctk.CTk):
         self._img_count_by_source: dict = {"AI": "3", "픽숨": "3", "플리커": "3"}
         self._img_source_per_option: list = ["AI"] * 15
         self._mac_entries = []
+        self._is_guest = False
+        self._guest_prompt_enabled = [False] * 15
         self._max_width = 0
         self._var_settings = {
             "crop_pct_min":        0.5,  "crop_pct_max":        3.5,
@@ -652,6 +619,8 @@ class App(ctk.CTk):
         self._fetch_mac_from_gist()   # MAC 체크 전에 Gist 최신 목록 수신
         if not self._check_mac_allowed():
             return
+        if self._is_guest:
+            self._apply_guest_mode()
         threading.Thread(target=self._auto_start_browser, daemon=True).start()
         threading.Thread(target=self._auto_warmup_hf, daemon=True).start()
         threading.Thread(target=self._sync_remote_prompts, daemon=True).start()
@@ -707,8 +676,10 @@ class App(ctk.CTk):
         _idx = self._selected_prompt_idx
         _kw_now = (self.keyword_textbox.get("1.0","end").strip() if self._is_secret_mode() else self.keyword_entry.get().strip())
         _kw2_now = (self.kw2_entry._entry.get() if hasattr(self.kw2_entry, '_entry') else self.kw2_entry.get()).strip()
+        _collect_kw_now = self.collect_kw_entry.get().strip()
         self._kw_per_option[_idx] = _kw_now
         self._kw2_per_option[_idx] = _kw2_now
+        self._collect_kw_per_option[_idx] = _collect_kw_now
         self._img_count_by_source[self._img_source] = self.img_count_entry.get().strip() or "3"
         self._img_source_per_option[_idx] = self._img_source
         prefs = {
@@ -746,8 +717,10 @@ class App(ctk.CTk):
             "flickr_height":        self._flickr_height,
             "flickr_keyword":       self._flickr_keyword,
             "mac_entries":          self._mac_entries,
+            "guest_prompt_enabled": self._guest_prompt_enabled,
             "kw_per_option":        self._kw_per_option,
             "kw2_per_option":       self._kw2_per_option,
+            "collect_kw_per_option": self._collect_kw_per_option,
             "img_count_by_source":  self._img_count_by_source,
             "img_source_per_option":self._img_source_per_option,
         }
@@ -759,15 +732,17 @@ class App(ctk.CTk):
     def _apply_prefs(self):
         if kp := self._prefs.get("kw_per_option"):
             if isinstance(kp, list):
-                for i, v in enumerate(kp[:15]):
-                    self._kw_per_option[i] = str(v)
+                self._kw_per_option = [str(v) for v in kp]
         if kp2 := self._prefs.get("kw2_per_option"):
             if isinstance(kp2, list):
-                for i, v in enumerate(kp2[:15]):
-                    self._kw2_per_option[i] = str(v)
+                self._kw2_per_option = [str(v) for v in kp2]
+        if ckp := self._prefs.get("collect_kw_per_option"):
+            if isinstance(ckp, list):
+                self._collect_kw_per_option = [str(v) for v in ckp]
         # selected_prompt_idx를 먼저 복원해야 img_source/keyword 등이 올바른 옵션에서 읽힘
         try:
-            self._selected_prompt_idx = max(0, min(14, int(self._prefs.get("selected_prompt_idx", 0))))
+            _n = max(1, len(self._kw_per_option))
+            self._selected_prompt_idx = max(0, min(_n - 1, int(self._prefs.get("selected_prompt_idx", 0))))
         except Exception:
             pass
         _idx = self._selected_prompt_idx
@@ -780,12 +755,14 @@ class App(ctk.CTk):
             self.kw2_entry.configure(state="normal")
             self.kw2_entry.delete(0, "end")
             self.kw2_entry.insert(0, kw2)
+        collect_kw = self._collect_kw_per_option[_idx] if _idx < len(self._collect_kw_per_option) else ""
+        if collect_kw:
+            self.collect_kw_entry.delete(0, "end")
+            self.collect_kw_entry.insert(0, collect_kw)
         if isp := self._prefs.get("img_source_per_option"):
             if isinstance(isp, list):
                 _src_normalize = {"PICSUM": "픽숨", "FLICKR": "플리커"}
-                for i, v in enumerate(isp[:15]):
-                    sv = str(v)
-                    self._img_source_per_option[i] = _src_normalize.get(sv, sv)
+                self._img_source_per_option = [_src_normalize.get(str(v), str(v)) for v in isp]
         if ibs := self._prefs.get("img_count_by_source"):
             if isinstance(ibs, dict):
                 _src_compat = {"PICSUM": "픽숨", "FLICKR": "플리커"}
@@ -805,31 +782,28 @@ class App(ctk.CTk):
         self.img_count_entry.delete(0, "end")
         self.img_count_entry.insert(0, _cnt_val)
         if saved_prompts := self._prefs.get("prompts"):
-            if isinstance(saved_prompts, list):
-                for i, p in enumerate(saved_prompts[:15]):
-                    self._prompts[i] = p or ""
+            if isinstance(saved_prompts, list) and saved_prompts:
+                self._prompts = [str(p) if p else "" for p in saved_prompts]
         elif cp := self._prefs.get("custom_prompt"):
             self._prompts[0] = cp
         if saved_p2 := self._prefs.get("prompts2"):
             if isinstance(saved_p2, list):
-                for i, p in enumerate(saved_p2[:15]):
-                    self._prompts2[i] = p or ""
+                self._prompts2 = [str(p) if p else "" for p in saved_p2]
         if saved_kw2 := self._prefs.get("kw2_enabled"):
             if isinstance(saved_kw2, list):
-                for i, v in enumerate(saved_kw2[:15]):
-                    self._kw2_enabled[i] = bool(v)
+                self._kw2_enabled = [bool(v) for v in saved_kw2]
         if saved_oe := self._prefs.get("option_enabled"):
             if isinstance(saved_oe, list):
-                for i, v in enumerate(saved_oe[:15]):
-                    self._option_enabled[i] = bool(v)
+                self._option_enabled = [bool(v) for v in saved_oe]
         if saved_te := self._prefs.get("topic_enabled"):
             if isinstance(saved_te, list):
-                for i, v in enumerate(saved_te[:15]):
-                    self._topic_enabled[i] = bool(v)
+                self._topic_enabled = [bool(v) for v in saved_te]
         if saved_ce := self._prefs.get("collect_enabled"):
             if isinstance(saved_ce, list):
-                for i, v in enumerate(saved_ce[:15]):
-                    self._collect_enabled[i] = bool(v)
+                self._collect_enabled = [bool(v) for v in saved_ce]
+        if saved_gpe := self._prefs.get("guest_prompt_enabled"):
+            if isinstance(saved_gpe, list):
+                self._guest_prompt_enabled = [bool(v) for v in saved_gpe]
         if cc := self._prefs.get("collect_count"):
             try: self._collect_count = int(cc)
             except Exception: pass
@@ -862,10 +836,9 @@ class App(ctk.CTk):
                 ]
         if saved_names := self._prefs.get("prompt_names"):
             if isinstance(saved_names, list):
-                for i, n in enumerate(saved_names[:15]):
-                    self._prompt_names[i] = n or f"옵션 {i+1}"
+                self._prompt_names = [str(n) if n else f"옵션 {i+1}" for i, n in enumerate(saved_names)]
         idx = self._prefs.get("selected_prompt_idx", 0)
-        self._selected_prompt_idx = max(0, min(14, int(idx)))
+        self._selected_prompt_idx = max(0, min(max(0, len(self._prompts)-1), int(idx)))
         if folder := self._prefs.get("local_img_folder"):
             self._local_img_folder = folder
         if outdir := self._prefs.get("variation_output_dir"):
@@ -933,9 +906,31 @@ class App(ctk.CTk):
         elif wl := self._prefs.get("mac_whitelist"):  # 구버전 키 마이그레이션
             if isinstance(wl, list) and wl:
                 self._mac_entries = [{"mac": str(m).upper(), "note": ""} for m in wl]
+        self._normalize_option_arrays()
         self._rebuild_selector()
         self._update_kw2_state()
         self.after(100, self._update_topic_state)
+
+    def _normalize_option_arrays(self):
+        n = max(1, len(self._prompts))
+        def _fit(arr, default):
+            arr.extend([default] * max(0, n - len(arr)))
+            del arr[n:]
+        _fit(self._prompts, "")
+        _fit(self._prompts2, "")
+        _fit(self._kw2_enabled, False)
+        _fit(self._option_enabled, True)
+        _fit(self._topic_enabled, False)
+        _fit(self._collect_enabled, False)
+        _fit(self._guest_prompt_enabled, False)
+        while len(self._prompt_names) < n:
+            self._prompt_names.append(f"옵션 {len(self._prompt_names)+1}")
+        del self._prompt_names[n:]
+        _fit(self._kw_per_option, "")
+        _fit(self._kw2_per_option, "")
+        _fit(self._collect_kw_per_option, "")
+        _fit(self._img_source_per_option, "AI")
+        self._selected_prompt_idx = max(0, min(n - 1, self._selected_prompt_idx))
 
     def _fetch_mac_from_gist(self):
         """시작 시 Gist에서 최신 mac_entries를 동기적으로 가져옵니다."""
@@ -963,10 +958,15 @@ class App(ctk.CTk):
                             if isinstance(me, list) and me:
                                 self._mac_entries = [
                                     {"mac": str(e.get("mac","")).upper(),
-                                     "note": str(e.get("note",""))}
+                                     "note": str(e.get("note","")),
+                                     "guest": bool(e.get("guest", False))}
                                     for e in me if isinstance(e, dict)
                                 ]
-                        break
+                                if gpe := data.get("guest_prompt_enabled"):
+                                    if isinstance(gpe, list):
+                                        for i, v in enumerate(gpe[:15]):
+                                            self._guest_prompt_enabled[i] = bool(v)
+                                break
         except Exception:
             pass  # 실패 시 로컬 prefs 목록 사용
 
@@ -978,10 +978,11 @@ class App(ctk.CTk):
                 "허용 MAC 목록을 불러올 수 없습니다.\n인터넷 연결을 확인하고 다시 실행해 주세요."
             )
             import sys; sys.exit(0)
-        allowed = {e["mac"].upper() for e in self._mac_entries}
         current = _get_mac_address().upper()
-        if current in allowed:
-            return True
+        for e in self._mac_entries:
+            if e["mac"].upper() == current:
+                self._is_guest = bool(e.get("guest", False))
+                return True
         self._show_access_denied(current)
         self.after(0, self._safe_exit)
         return False
@@ -993,6 +994,14 @@ class App(ctk.CTk):
             pass
         import sys
         sys.exit(0)
+
+    def _apply_guest_mode(self):
+        for attr in ("btn_img", "btn_all", "row2", "img_prog_frame", "img_hdr"):
+            try:
+                getattr(self, attr).pack_forget()
+            except Exception:
+                pass
+        self._rebuild_selector()
 
     def _show_access_denied(self, mac: str):
         import tkinter as _tk
@@ -1096,27 +1105,30 @@ class App(ctk.CTk):
         except Exception:
             pass
 
-    def _sync_remote_prompts(self):
+    def _sync_remote_prompts(self, _retry: int = 0):
         url = re.sub(r'/raw/[0-9a-f]{40}/', '/raw/', self._remote_url.strip())
         if not url:
             return
-        self._remote_url = url  # 정규화된 URL로 갱신
+        self._remote_url = url
         self.after(0, lambda: self._set_sync_ui("loading"))
         try:
             import urllib.request as _ur
 
-            # GitHub Gist raw URL이면 CDN 캐시를 우회하여 API로 직접 가져오기
             gist_m = re.search(
                 r'gist\.githubusercontent\.com/([^/]+)/([0-9a-f]+)/raw/([^?]+)', url)
             if gist_m:
                 gist_id = gist_m.group(2)
                 filename = gist_m.group(3).rsplit('/', 1)[-1]
                 api_url = f"https://api.github.com/gists/{gist_id}"
-                api_req = _ur.Request(api_url, headers={
+                _sync_headers = {
                     "User-Agent": "BAMHOBAKBot/1.0",
                     "Accept":     "application/vnd.github+json",
-                })
-                with _urlopen_ssl(api_req, timeout=15) as resp:
+                }
+                _tok = getattr(config, "GITHUB_TOKEN", "").strip()
+                if _tok:
+                    _sync_headers["Authorization"] = f"token {_tok}"
+                api_req = _ur.Request(api_url, headers=_sync_headers)
+                with _urlopen_ssl(api_req, timeout=20) as resp:
                     api_json = json.loads(resp.read().decode("utf-8"))
                 files = api_json.get("files", {})
                 raw_content = None
@@ -1128,11 +1140,10 @@ class App(ctk.CTk):
                     raise ValueError("Gist에서 JSON 파일을 찾을 수 없습니다.")
                 data = json.loads(raw_content)
             else:
-                # 일반 URL: 타임스탬프로 캐시 무효화
                 sep = "&" if "?" in url else "?"
                 req = _ur.Request(f"{url}{sep}_t={int(time.time())}", headers={
                     "User-Agent": "BAMHOBAKBot/1.0"})
-                with _urlopen_ssl(req, timeout=15) as resp:
+                with _urlopen_ssl(req, timeout=20) as resp:
                     raw = resp.read().decode("utf-8")
                 data = json.loads(raw)
 
@@ -1140,33 +1151,32 @@ class App(ctk.CTk):
             self.after(0, lambda: self._set_sync_ui("ok"))
             self.after(200, self._save_prefs)
         except Exception as e:
-            self.after(0, lambda err=str(e): self._set_sync_ui("error", err))
+            if _retry < 3:
+                # 실패 시 3초 대기 후 재시도 (최대 3회)
+                time.sleep(3)
+                self._sync_remote_prompts(_retry + 1)
+            else:
+                self.after(0, lambda err=str(e): self._set_sync_ui("error", err))
 
     def _apply_remote_data(self, data: dict):
         if p := data.get("prompts"):
-            if isinstance(p, list):
-                for i, v in enumerate(p[:15]):
-                    self._prompts[i] = v or ""
+            if isinstance(p, list) and p:
+                self._prompts = [str(v) if v else "" for v in p]
         if p2 := data.get("prompts2"):
             if isinstance(p2, list):
-                for i, v in enumerate(p2[:15]):
-                    self._prompts2[i] = v or ""
+                self._prompts2 = [str(v) if v else "" for v in p2]
         if kw2 := data.get("kw2_enabled"):
             if isinstance(kw2, list):
-                for i, v in enumerate(kw2[:15]):
-                    self._kw2_enabled[i] = bool(v)
+                self._kw2_enabled = [bool(v) for v in kw2]
         if oe := data.get("option_enabled"):
             if isinstance(oe, list):
-                for i, v in enumerate(oe[:15]):
-                    self._option_enabled[i] = bool(v)
+                self._option_enabled = [bool(v) for v in oe]
         if te := data.get("topic_enabled"):
             if isinstance(te, list):
-                for i, v in enumerate(te[:15]):
-                    self._topic_enabled[i] = bool(v)
+                self._topic_enabled = [bool(v) for v in te]
         if ce := data.get("collect_enabled"):
             if isinstance(ce, list):
-                for i, v in enumerate(ce[:15]):
-                    self._collect_enabled[i] = bool(v)
+                self._collect_enabled = [bool(v) for v in ce]
         if cc := data.get("collect_count"):
             try: self._collect_count = int(cc)
             except Exception: pass
@@ -1193,8 +1203,7 @@ class App(ctk.CTk):
                 ]
         if names := data.get("prompt_names"):
             if isinstance(names, list):
-                for i, n in enumerate(names[:15]):
-                    self._prompt_names[i] = n or f"옵션 {i+1}"
+                self._prompt_names = [str(n) if n else f"옵션 {i+1}" for i, n in enumerate(names)]
         if vs := data.get("var_settings"):
             if isinstance(vs, dict):
                 for k in self._var_settings:
@@ -1220,11 +1229,30 @@ class App(ctk.CTk):
                 parsed = []
                 for item in me:
                     if isinstance(item, dict):
-                        parsed.append({"mac": str(item.get("mac","")).upper(), "note": str(item.get("note",""))})
+                        parsed.append({
+                            "mac": str(item.get("mac","")).upper(),
+                            "note": str(item.get("note","")),
+                            "guest": bool(item.get("guest", False)),
+                        })
                     elif isinstance(item, str):
-                        parsed.append({"mac": item.upper(), "note": ""})
+                        parsed.append({"mac": item.upper(), "note": "", "guest": False})
                 if parsed:
                     self._mac_entries = parsed
+        if gpe := data.get("guest_prompt_enabled"):
+            if isinstance(gpe, list):
+                self._guest_prompt_enabled = [bool(v) for v in gpe]
+        if ac := data.get("auto_config"):
+            if isinstance(ac, dict):
+                try:
+                    import yaml as _yaml_rd
+                    _auto_p = _BASE_DIR / "auto" / "config.yaml"
+                    _auto_p.parent.mkdir(parents=True, exist_ok=True)
+                    with open(_auto_p, "w", encoding="utf-8") as _f:
+                        _yaml_rd.dump(ac, _f, allow_unicode=True,
+                                      default_flow_style=False, sort_keys=False)
+                except Exception:
+                    pass
+        self._normalize_option_arrays()
         self._rebuild_selector()
         self._update_kw2_state()
 
@@ -1251,7 +1279,7 @@ class App(ctk.CTk):
     def _build_ui(self):
         hdr = ctk.CTkFrame(self, fg_color=C["accent"], height=54, corner_radius=0)
         hdr.pack(fill="x"); hdr.pack_propagate(False)
-        _lbl(hdr, "Bamhobak Blog Bot",
+        _lbl(hdr, "",
              font=("Malgun Gothic", 16, "bold"), color="white").pack(side="left", padx=22, pady=12)
 
         ctrl = ctk.CTkFrame(hdr, fg_color="transparent")
@@ -1348,6 +1376,18 @@ class App(ctk.CTk):
             btn_tab2.configure(fg_color="white", text_color=C["accent"], hover_color="#E8EAF6")
             btn_tab1.configure(fg_color="transparent", text_color="white", hover_color="#6478EB")
 
+        self._auto_btn = ctk.CTkButton(
+            tab_btn_area, text="🤖  자동화 로그인", command=self._launch_naver_auto,
+            height=28, font=("Malgun Gothic", 12, "bold"),
+            fg_color="#2A9D6F", hover_color="#1E8259",
+            text_color="white", corner_radius=8,
+        )
+        self._auto_btn.pack(side="left", padx=(0, 5))
+        self._auto_proc = None
+
+        ctk.CTkLabel(tab_btn_area, text="|", width=10,
+                     font=("Malgun Gothic", 12), text_color="#8899CC").pack(side="left", padx=4)
+
         btn_tab1 = ctk.CTkButton(
             tab_btn_area, text="✨  생성하기", command=_show_tab1,
             height=28, font=("Malgun Gothic", 12, "bold"),
@@ -1367,6 +1407,38 @@ class App(ctk.CTk):
         self._build_generate_tab(tab1_frame)
         self._build_settings_tab(tab2_frame)
         _show_tab1()
+
+    # ── 네이버 자동화 실행 ────────────────────────────────
+    def _launch_naver_auto(self):
+        if self._auto_proc and self._auto_proc.is_alive():
+            return
+
+        import tkinter.messagebox as mb
+        import multiprocessing
+
+        if getattr(sys, "frozen", False):
+            naver_dir = str(Path(sys._MEIPASS) / "auto")
+        else:
+            naver_dir = str(Path(__file__).parent / "auto")
+
+        if not Path(naver_dir, "main.py").exists():
+            mb.showerror("자동화 로그인", f"auto 파일을 찾을 수 없습니다.\n{naver_dir}")
+            return
+
+        import os as _os
+        _os.environ["AUTO_CONFIG_PATH"] = str(_BASE_DIR / "auto" / "config.yaml")
+        p = multiprocessing.Process(target=_naver_auto_worker, args=(naver_dir,), daemon=True)
+        p.start()
+        self._auto_proc = p
+        self._auto_btn.configure(fg_color="#C0392B", hover_color="#A93226")
+        self._poll_auto_proc()
+
+    def _poll_auto_proc(self):
+        if self._auto_proc and self._auto_proc.is_alive():
+            self.after(1000, self._poll_auto_proc)
+        else:
+            self._auto_proc = None
+            self._auto_btn.configure(fg_color="#2A9D6F", hover_color="#1E8259")
 
     # ── 생성하기 탭 ──────────────────────────────────────
     def _build_generate_tab(self, parent):
@@ -1400,13 +1472,18 @@ class App(ctk.CTk):
         self.prompt_selector.set(self._prompt_names[0])
         self.prompt_selector.pack(side="left", padx=(0, 6))
 
-        _lbl(row1, "키워드", font=F_B).pack(side="left", padx=(0, 8))
+        self.kw_row1_lbl = ctk.CTkLabel(
+            row1, text="키워드",
+            font=F_B, text_color=C["subtext"],
+        )
+        # 인기글 수집 모드에서만 표시
+
         self._kw_frame = ctk.CTkFrame(row1, fg_color="transparent")
         self._kw_frame.pack(side="left", fill="x", expand=True, padx=(0, 6))
 
-        self.keyword_entry = ctk.CTkEntry(
+        self.keyword_entry = _UndoEntry(
             self._kw_frame,
-            placeholder_text="예: 제주도 여행, 다이어트 식단, 서울 카페 추천...",
+            placeholder_text="키워드 입력",
             height=38, font=F,
             fg_color=C["input_bg"], border_color=C["border"],
             text_color=C["text"], placeholder_text_color=C["subtext"],
@@ -1415,13 +1492,13 @@ class App(ctk.CTk):
         self.keyword_entry.pack(fill="x", expand=True)
         self.keyword_entry.bind("<Return>", lambda e: self._start_all())
 
-        self.keyword_textbox = ctk.CTkTextbox(
+        self.keyword_textbox = tk.Text(
             self._kw_frame,
-            height=86, font=F,
-            fg_color=C["input_bg"], border_color=C["border"],
-            text_color=C["text"],
-            corner_radius=8, border_width=2,
-            wrap="word",
+            height=4, font=F,
+            bg=C["input_bg"], fg=C["text"],
+            insertbackground=C["text"],
+            relief="flat", bd=0, padx=6, pady=4, wrap="word",
+            highlightthickness=1, highlightbackground=C["border"],
         )
         # 초기 숨김 (시크릿 모드일 때만 표시)
 
@@ -1447,10 +1524,17 @@ class App(ctk.CTk):
             width=20, height=20,
         )
         self.kw2_lbl.pack(side="left", padx=(0, 6))
-        self.kw2_entry = ctk.CTkEntry(
+
+        self.kw2_topic_lbl = ctk.CTkLabel(
+            row1, text="주제",
+            font=F_B, text_color=C["subtext"],
+        )
+        # 주제 사용 ON (비수집) 시에만 표시
+
+        self.kw2_entry = _UndoEntry(
             row1,
-            placeholder_text="",
-            width=170, height=38, font=F,
+            placeholder_text="주제 입력",
+            width=120, height=38, font=F,
             fg_color="#B8C0D0", border_color="#9AA5BB",
             text_color="#70788A", placeholder_text_color="#70788A",
             corner_radius=8, state="disabled",
@@ -1488,7 +1572,25 @@ class App(ctk.CTk):
             text_color="white", corner_radius=8, state="disabled")
         self.btn_stop.pack(side="left")
 
-        row2 = ctk.CTkFrame(ti, fg_color="transparent")
+        # 인기글 수집 모드 전용 두 번째 줄 (원제목 입력)
+        self.collect_row2 = ctk.CTkFrame(ti, fg_color="transparent")
+        # 초기 숨김 — collect ON 시에만 pack
+        self.collect_kw_lbl = ctk.CTkLabel(
+            self.collect_row2, text="원제목",
+            font=F_B, text_color=C["subtext"],
+        )
+        self.collect_kw_lbl.pack(side="left", padx=(176, 4))
+        self.collect_kw_entry = _UndoEntry(
+            self.collect_row2,
+            placeholder_text="기본 제목 입력",
+            height=38, font=F,
+            fg_color=C["input_bg"], border_color=C["border"],
+            text_color=C["text"], placeholder_text_color=C["subtext"],
+            corner_radius=8,
+        )
+        self.collect_kw_entry.pack(side="left", fill="x", expand=True, padx=(0, 283))
+
+        self.row2 = row2 = ctk.CTkFrame(ti, fg_color="transparent")
         row2.pack(fill="x", pady=(4, 0))
 
         # 로컬 이미지 변형 (AI 생성과 독립 실행)
@@ -1537,7 +1639,7 @@ class App(ctk.CTk):
         img_cnt_frame = ctk.CTkFrame(row2, fg_color="transparent")
         img_cnt_frame.pack(side="right")
         self.img_src_menu = ctk.CTkOptionMenu(
-            img_cnt_frame, values=["AI", "픽숨", "플리커"],
+            img_cnt_frame, values=["AI", "플리커", "픽숨"],
             command=self._on_img_source_change,
             width=80, height=28, font=F_SMB,
             fg_color=C["accent_bg"], button_color=C["border"],
@@ -1547,7 +1649,7 @@ class App(ctk.CTk):
         )
         self.img_src_menu.pack(side="left", padx=(0, 8))
         _lbl(img_cnt_frame, "이미지", font=F_SM, color=C["subtext"]).pack(side="left", padx=(0, 6))
-        self.img_count_entry = ctk.CTkEntry(
+        self.img_count_entry = _UndoEntry(
             img_cnt_frame, width=52, height=28, font=F_SMB,
             fg_color=C["input_bg"], border_color=C["border"],
             text_color=C["text"], justify="center", corner_radius=8,
@@ -1578,11 +1680,13 @@ class App(ctk.CTk):
         self.text_prog.set(0)
 
         # 📷 이미지
-        ctk.CTkLabel(one_row, text="📷", font=F_SM, width=22,
+        self.img_prog_frame = ctk.CTkFrame(one_row, fg_color="transparent")
+        self.img_prog_frame.pack(side="left")
+        ctk.CTkLabel(self.img_prog_frame, text="📷", font=F_SM, width=22,
                      text_color=C["subtext"]).pack(side="left", padx=(10, 0))
-        self.img_status_lbl = _lbl(one_row, "대기 중", font=F_SM, color=C["subtext"], width=100, anchor="w")
+        self.img_status_lbl = _lbl(self.img_prog_frame, "대기 중", font=F_SM, color=C["subtext"], width=100, anchor="w")
         self.img_status_lbl.pack(side="left")
-        self.img_prog = ctk.CTkProgressBar(one_row, width=100, height=8, corner_radius=4,
+        self.img_prog = ctk.CTkProgressBar(self.img_prog_frame, width=100, height=8, corner_radius=4,
             progress_color=C["accent_bg"], fg_color=C["accent_bg"])
         self.img_prog.pack(side="left", padx=(4, 0))
         self.img_prog.set(0)
@@ -1611,7 +1715,7 @@ class App(ctk.CTk):
         self.text_count_lbl.pack(side="right", padx=(0, 8))
 
         # ⑤ 이미지 영역 — bottom에 먼저 pack해야 콘텐츠 expand에 밀리지 않음
-        img_hdr = ctk.CTkFrame(parent, fg_color="transparent")
+        self.img_hdr = img_hdr = ctk.CTkFrame(parent, fg_color="transparent")
         img_hdr.pack(side="bottom", fill="x", padx=14, pady=(2, 4))
         img_top = ctk.CTkFrame(img_hdr, fg_color="transparent")
         img_top.pack(fill="x", pady=(0, 2))
@@ -1628,7 +1732,7 @@ class App(ctk.CTk):
         img_wrapper = tk.Frame(img_hdr, bg=C["card"])
         img_wrapper.pack(fill="x")
 
-        # 가로 스크롤바 — 루피 커스텀
+        # 가로 스크롤바
         self._img_hscroll = LoopyScrollbar(img_wrapper)
         self._img_hscroll.pack(side="bottom", fill="x")
 
@@ -1742,14 +1846,14 @@ class App(ctk.CTk):
         _link(ct, "→ 무료 가입", "https://dash.cloudflare.com/sign-up").pack(side="right")
 
         _lbl(ci, "Account ID", font=F_SMB, color=C["subtext"]).pack(anchor="w", pady=(10,2))
-        self.cf_account_entry = ctk.CTkEntry(ci, height=36, font=F,
+        self.cf_account_entry = _UndoEntry(ci, height=36, font=F,
             fg_color=C["input_bg"], border_color=C["border"],
             text_color=C["text"], corner_radius=8, placeholder_text="32자리 Account ID")
         self.cf_account_entry.pack(fill="x")
         self.cf_account_entry.insert(0, config.CF_ACCOUNT_ID)
 
         _lbl(ci, "API Token", font=F_SMB, color=C["subtext"]).pack(anchor="w", pady=(8,2))
-        self.cf_token_entry = ctk.CTkEntry(ci, height=36, font=F,
+        self.cf_token_entry = _UndoEntry(ci, height=36, font=F,
             fg_color=C["input_bg"], border_color=C["border"],
             text_color=C["text"], corner_radius=8, placeholder_text="Workers AI 권한 토큰")
         self.cf_token_entry.pack(fill="x")
@@ -1960,12 +2064,13 @@ class App(ctk.CTk):
         kw2 = (self.kw2_entry.get().strip()
                if not self._topic_enabled[idx] and (self._kw2_enabled[idx] or not self._collect_enabled[idx])
                else "")
+        collect_kw2 = self.collect_kw_entry.get().strip() if self._collect_enabled[idx] else ""
         count = self._get_img_count()
         self._init_image_slots(count)
         self._reset_outputs()
         self._lock_btns(True)
         self.timer_label.configure(text="", text_color=C["accent"])
-        threading.Thread(target=self._gen_all, args=(kw, kw2, count), daemon=True).start()
+        threading.Thread(target=self._gen_all, args=(kw, kw2, collect_kw2, count), daemon=True).start()
 
     def _check_password(self):
         dlg = ctk.CTkToplevel(self)
@@ -1979,7 +2084,7 @@ class App(ctk.CTk):
         dlg.geometry(f"220x110+{(sw-220)//2}+{(sh-110)//2}")
 
         _lbl(dlg, "비밀번호", font=F_SM, color=C["subtext"]).pack(pady=(14, 6))
-        pw_entry = ctk.CTkEntry(
+        pw_entry = _UndoEntry(
             dlg, width=150, height=32, show="*", font=F,
             fg_color=C["input_bg"], border_color=C["border"],
             text_color=C["text"], corner_radius=8,
@@ -2009,6 +2114,7 @@ class App(ctk.CTk):
         try:
             self._kw_per_option[old_idx] = self.keyword_entry.get().strip()
             self._kw2_per_option[old_idx] = (self.kw2_entry._entry.get() if hasattr(self.kw2_entry, '_entry') else self.kw2_entry.get()).strip()
+            self._collect_kw_per_option[old_idx] = self.collect_kw_entry.get().strip()
             self._img_count_by_source[self._img_source] = self.img_count_entry.get().strip() or "3"
             self._img_source_per_option[old_idx] = self._img_source
         except Exception:
@@ -2024,6 +2130,11 @@ class App(ctk.CTk):
             self.kw2_entry.configure(state="normal")
             self.kw2_entry.delete(0, "end")
             self.kw2_entry.insert(0, self._kw2_per_option[new_idx])
+        except Exception:
+            pass
+        try:
+            self.collect_kw_entry.delete(0, "end")
+            self.collect_kw_entry.insert(0, self._collect_kw_per_option[new_idx])
         except Exception:
             pass
         self._img_source = self._img_source_per_option[new_idx]
@@ -2043,7 +2154,7 @@ class App(ctk.CTk):
         sw, sh = self.winfo_screenwidth(), self.winfo_screenheight()
         dlg.geometry(f"220x110+{(sw-220)//2}+{(sh-110)//2}")
         _lbl(dlg, "비밀번호", font=F_SM, color=C["subtext"]).pack(pady=(14, 6))
-        pw_entry = ctk.CTkEntry(
+        pw_entry = _UndoEntry(
             dlg, width=150, height=32, show="*", font=F,
             fg_color=C["input_bg"], border_color=C["border"],
             text_color=C["text"], corner_radius=8,
@@ -2056,6 +2167,7 @@ class App(ctk.CTk):
                 try:
                     self._kw_per_option[old_idx] = self.keyword_entry.get().strip()
                     self._kw2_per_option[old_idx] = (self.kw2_entry._entry.get() if hasattr(self.kw2_entry, '_entry') else self.kw2_entry.get()).strip()
+                    self._collect_kw_per_option[old_idx] = self.collect_kw_entry.get().strip()
                     self._img_count_by_source[self._img_source] = self.img_count_entry.get().strip() or "3"
                     self._img_source_per_option[old_idx] = self._img_source
                 except Exception:
@@ -2071,6 +2183,11 @@ class App(ctk.CTk):
                     self.kw2_entry.configure(state="normal")
                     self.kw2_entry.delete(0, "end")
                     self.kw2_entry.insert(0, self._kw2_per_option[new_idx])
+                except Exception:
+                    pass
+                try:
+                    self.collect_kw_entry.delete(0, "end")
+                    self.collect_kw_entry.insert(0, self._collect_kw_per_option[new_idx])
                 except Exception:
                     pass
                 self._img_source = self._img_source_per_option[new_idx]
@@ -2113,6 +2230,17 @@ class App(ctk.CTk):
             q = (small // 32).reshape(-1, 3)
             _, counts = np.unique(q, axis=0, return_counts=True)
             return float(counts.max()) / len(q) > threshold
+        except Exception:
+            return False
+
+    @staticmethod
+    def _has_excessive_red(img: Image.Image, threshold: float = 0.10) -> bool:
+        """선명한 빨강 픽셀이 10% 초과이면 True (loremflickr 오류 이미지 감지)."""
+        try:
+            small = img.convert("RGB").resize((80, 80))
+            pixels = small.getdata()
+            red = sum(1 for r, g, b in pixels if r > 180 and g < 80 and b < 80)
+            return red / len(pixels) > threshold
         except Exception:
             return False
 
@@ -2414,7 +2542,7 @@ class App(ctk.CTk):
         count = len(files)
         src_root = Path(self._local_img_folder)
         src_name = src_root.name
-        folder_name = f"{src_name}_{_time.strftime('%m%d%H%M%S')}"
+        folder_name = f"{_time.strftime('%m%d%H%M%S')}_{src_name}"
         # 지정된 출력 폴더 우선, 없으면 Desktop → Documents → exe 순으로 시도
         base_candidates = (
             [Path(self._variation_output_dir)] if self._variation_output_dir
@@ -2492,12 +2620,25 @@ class App(ctk.CTk):
                 state="normal", fg_color=C["accent"]))
 
     def _rebuild_selector(self):
-        """활성화된 옵션만 드롭다운에 표시."""
-        enabled_names = [self._prompt_names[i] for i in range(15) if self._option_enabled[i]]
+        """활성화된 옵션만 드롭다운에 표시. 게스트 모드: 게스트 허용 옵션만, 비게스트: 게스트 전용 옵션 제외."""
+        n = len(self._prompts)
+        if self._is_guest:
+            enabled_names = [self._prompt_names[i] for i in range(n)
+                             if self._option_enabled[i] and self._guest_prompt_enabled[i]]
+        else:
+            enabled_names = [self._prompt_names[i] for i in range(n)
+                             if self._option_enabled[i] and not self._guest_prompt_enabled[i]]
         if not enabled_names:
-            self._option_enabled[0] = True
-            enabled_names = [self._prompt_names[0]]
-        self.prompt_selector.configure(values=enabled_names)
+            if not self._is_guest:
+                for i in range(n):
+                    if not self._guest_prompt_enabled[i]:
+                        self._option_enabled[i] = True
+                        enabled_names = [self._prompt_names[i]]
+                        break
+                if not enabled_names and n > 0:
+                    self._option_enabled[0] = True
+                    enabled_names = [self._prompt_names[0]]
+        self.prompt_selector.configure(values=enabled_names if enabled_names else ["—"])
         current = self._prompt_names[self._selected_prompt_idx]
         if current not in enabled_names:
             first = enabled_names[0]
@@ -2526,8 +2667,11 @@ class App(ctk.CTk):
 
         if topic_on:
             # 육성 주제 사용 ON: 체크박스·입력칸 모두 숨김
+            self.kw_row1_lbl.pack_forget()
             self.kw2_lbl.pack_forget()
+            self.kw2_topic_lbl.pack_forget()
             self.kw2_entry.pack_forget()
+            self.collect_row2.pack_forget()
             return
 
         # 입력칸 표시 (위치 고정)
@@ -2535,16 +2679,22 @@ class App(ctk.CTk):
         self.kw2_entry.pack(side="left", padx=(0, 6), before=self.btn_text)
 
         if collect_on:
-            # 인기글 수집 ON: 체크박스 "업체(제품)" 표시
-            if self.kw2_lbl.winfo_manager() == "":
-                self.kw2_lbl.pack(side="left", padx=(0, 6), before=self.kw2_entry)
-            self.kw2_lbl.configure(text="업체(제품)")
+            # 인기글 수집 ON: row1에 키워드·업체 레이블, 두 번째 줄에 원제목 입력
+            self.kw_row1_lbl.pack_forget()
+            self.kw_row1_lbl.pack(side="left", padx=(0, 4), before=self._kw_frame)
+            self.kw2_lbl.pack_forget()
+            self.kw2_lbl.pack(side="left", padx=(0, 6), before=self.kw2_entry)
+            self.kw2_lbl.configure(text="업체명")
+            # collect_row2 표시 (before=self.row2로 올바른 위치에 삽입)
+            self.collect_row2.pack_forget()
+            self.collect_row2.pack(fill="x", pady=(2, 0), before=self.row2)
             if enabled:
                 self.kw2_entry.configure(
                     state="normal",
                     fg_color=C["input_bg"],
                     border_color=C["border"],
                     text_color=C["text"],
+                    placeholder_text="업체명 입력",
                     placeholder_text_color=C["subtext"],
                 )
             else:
@@ -2553,18 +2703,40 @@ class App(ctk.CTk):
                     fg_color="#B8C0D0",
                     border_color="#9AA5BB",
                     text_color="#70788A",
+                    placeholder_text="업체명 입력",
                     placeholder_text_color="#70788A",
                 )
         else:
-            # 인기글 수집 OFF (주제 사용 ON 또는 일반 모드): 체크박스 숨김, 입력칸 활성
-            self.kw2_lbl.pack_forget()
-            self.kw2_entry.configure(
-                state="normal",
-                fg_color=C["input_bg"],
-                border_color=C["border"],
-                text_color=C["text"],
-                placeholder_text_color=C["subtext"],
-            )
+            # 인기글 수집 OFF
+            self.collect_row2.pack_forget()
+            if enabled:
+                # 주제 사용 ON: 키워드·주제 레이블 표시 (체크박스 숨김)
+                self.kw_row1_lbl.pack_forget()
+                self.kw_row1_lbl.pack(side="left", padx=(0, 4), before=self._kw_frame)
+                self.kw2_lbl.pack_forget()
+                self.kw2_topic_lbl.pack_forget()
+                self.kw2_topic_lbl.pack(side="left", padx=(0, 6), before=self.kw2_entry)
+                self.kw2_entry.configure(
+                    state="normal",
+                    fg_color=C["input_bg"],
+                    border_color=C["border"],
+                    text_color=C["text"],
+                    placeholder_text="주제 입력",
+                    placeholder_text_color=C["subtext"],
+                )
+            else:
+                # 주제 사용 OFF: 레이블 숨김
+                self.kw_row1_lbl.pack_forget()
+                self.kw2_lbl.pack_forget()
+                self.kw2_topic_lbl.pack_forget()
+                self.kw2_entry.configure(
+                    state="disabled",
+                    fg_color="#B8C0D0",
+                    border_color="#9AA5BB",
+                    text_color="#70788A",
+                    placeholder_text="주제 입력",
+                    placeholder_text_color="#70788A",
+                )
 
         self.kw2_entry.delete(0, "end")
         if saved:
@@ -2840,6 +3012,7 @@ Remove-Item -Path (Split-Path $log) -Recurse -Force -ErrorAction SilentlyContinu
         working_collect = list(self._collect_enabled)
         working_enabled = list(self._option_enabled)
         working_names   = list(self._prompt_names)
+        working_guest   = list(self._guest_prompt_enabled)
         cur_idx         = [self._selected_prompt_idx]
         w_var           = {k: v for k, v in self._var_settings.items()}
         w_var_picsum    = {k: v for k, v in self._var_settings_picsum.items()}
@@ -2855,20 +3028,26 @@ Remove-Item -Path (Split-Path $log) -Recurse -Force -ErrorAction SilentlyContinu
         tab3_content = ctk.CTkFrame(dlg, fg_color="transparent")
         tab4_content = ctk.CTkFrame(dlg, fg_color="transparent")
         tab5_content = ctk.CTkFrame(dlg, fg_color="transparent")
+        tab6_content = ctk.CTkFrame(dlg, fg_color="transparent")
         active_tab = [1]
         tab1_btn_ref = [None]; tab2_btn_ref = [None]; tab3_btn_ref = [None]
-        tab4_btn_ref = [None]; tab5_btn_ref = [None]
+        tab4_btn_ref = [None]; tab5_btn_ref = [None]; tab6_btn_ref = [None]
         btn_row_ref   = [None]
         _clear_btn_ref = [None]
-        _all_tabs    = [tab1_content, tab2_content, tab3_content, tab4_content, tab5_content]
+        _all_tabs    = [tab1_content, tab2_content, tab3_content, tab4_content, tab5_content, tab6_content]
 
         def _show_tab(n):
+            if n == 2 and not _t2_built[0]:   _build_tab2(); _t2_built[0] = True
+            elif n == 3 and not _t3_built[0]: _build_tab3(); _t3_built[0] = True
+            elif n == 4 and not _t4_built[0]: _build_tab4(); _t4_built[0] = True
+            elif n == 5 and not _t5_built[0]: _build_tab5(); _t5_built[0] = True
+            elif n == 6 and not _t6_built[0]: _build_t6_widgets(); _t6_built[0] = True
             active_tab[0] = n
             for tf in _all_tabs:
                 tf.pack_forget()
             for tb, idx in [
                 (tab1_btn_ref[0],1),(tab2_btn_ref[0],4),(tab3_btn_ref[0],2),
-                (tab4_btn_ref[0],5),(tab5_btn_ref[0],3),
+                (tab4_btn_ref[0],5),(tab6_btn_ref[0],6),(tab5_btn_ref[0],3),
             ]:
                 if tb:
                     tb.configure(fg_color=C["accent"] if idx==n else "transparent",
@@ -2926,10 +3105,20 @@ Remove-Item -Path (Split-Path $log) -Recurse -Force -ErrorAction SilentlyContinu
         tab4_btn.pack(side="left", padx=(0, 4), pady=2)
         tab4_btn_ref[0] = tab4_btn
 
+        tab6_btn = ctk.CTkButton(
+            tab_btn_row, text="자동봇",
+            command=lambda: _show_tab(6),
+            width=100, height=32, font=F_SMB,
+            fg_color="transparent", hover_color=C["border"],
+            text_color=C["subtext"], corner_radius=6,
+        )
+        tab6_btn.pack(side="left", padx=(0, 4), pady=2)
+        tab6_btn_ref[0] = tab6_btn
+
         tab5_btn = ctk.CTkButton(
             tab_btn_row, text="허용 MAC",
             command=lambda: _show_tab(3),
-            width=120, height=32, font=F_SMB,
+            width=100, height=32, font=F_SMB,
             fg_color="transparent", hover_color=C["border"],
             text_color=C["subtext"], corner_radius=6,
         )
@@ -2949,7 +3138,7 @@ Remove-Item -Path (Split-Path $log) -Recurse -Force -ErrorAction SilentlyContinu
 
         # ── 탭1 내용: 프롬프트 옵션 ──────────────────────
         left = ctk.CTkScrollableFrame(
-            tab1_content, width=138, fg_color=C["accent_bg"], corner_radius=8,
+            tab1_content, width=195, fg_color=C["accent_bg"], corner_radius=8,
             scrollbar_button_color=C["border"],
         )
         left.pack(side="left", fill="y", padx=(0, 10))
@@ -2960,7 +3149,7 @@ Remove-Item -Path (Split-Path $log) -Recurse -Force -ErrorAction SilentlyContinu
         name_row = ctk.CTkFrame(right, fg_color="transparent")
         name_row.pack(fill="x", pady=(0, 8))
         _lbl(name_row, "이름", font=F_SMB, color=C["subtext"]).pack(side="left", padx=(0, 8))
-        name_entry = ctk.CTkEntry(
+        name_entry = _UndoEntry(
             name_row, height=30, font=F,
             fg_color=C["input_bg"], border_color=C["border"],
             text_color=C["text"], corner_radius=7,
@@ -2979,19 +3168,31 @@ Remove-Item -Path (Split-Path $log) -Recurse -Force -ErrorAction SilentlyContinu
             width=20, height=20,
         ).pack(side="left")
 
+        guest_var = ctk.BooleanVar(value=working_guest[cur_idx[0]])
+        ctk.CTkCheckBox(
+            name_row, text="게스트",
+            variable=guest_var,
+            command=lambda: _refresh_guest(),
+            font=F_SMB, text_color=C["text"],
+            fg_color=C["accent"], hover_color=C["accent_h"],
+            checkmark_color="white",
+            width=20, height=20,
+        ).pack(side="left", padx=(10, 0))
+
         _lbl(right, "프롬프트 1  —  키워드 아래에 추가됩니다.",
              font=F_SMB, color=C["text"]).pack(anchor="w", pady=(0, 3))
-        txt1 = ctk.CTkTextbox(
-            right, height=150, font=F,
-            fg_color=C["input_bg"], border_color=C["border"],
-            text_color=C["text"], corner_radius=8, border_width=1,
-            wrap="word",
+        txt1 = tk.Text(
+            right, height=8, font=F,
+            bg=C["input_bg"], fg=C["text"],
+            insertbackground=C["text"],
+            relief="flat", bd=0, padx=6, pady=4, wrap="word",
+            highlightthickness=1, highlightbackground=C["border"],
         )
         txt1.pack(fill="x", pady=(0, 8))
 
         topic_var   = ctk.BooleanVar(value=working_topic[cur_idx[0]])
         collect_var = ctk.BooleanVar(value=working_collect[cur_idx[0]])
-        kw2_var     = ctk.BooleanVar(value=working_kw2[cur_idx[0]])
+        kw2_var     = ctk.BooleanVar(value=working_kw2[cur_idx[0]] if not working_collect[cur_idx[0]] else False)
 
         def _on_topic():
             if topic_var.get():
@@ -3041,20 +3242,22 @@ Remove-Item -Path (Split-Path $log) -Recurse -Force -ErrorAction SilentlyContinu
         p2_lbl = _lbl(cb_row, "  —  주제 아래에 추가됩니다.", font=F_SM, color=C["subtext"])
         p2_lbl.pack(side="left")
 
-        txt2 = ctk.CTkTextbox(
-            right, height=150, font=F,
-            fg_color=C["accent_bg"], border_color=C["border"],
-            text_color=C["disabled"], corner_radius=8, border_width=1,
-            wrap="word", state="disabled",
+        txt2 = tk.Text(
+            right, height=8, font=F,
+            bg=C["accent_bg"], fg=C["disabled"],
+            insertbackground=C["text"],
+            relief="flat", bd=0, padx=6, pady=4, wrap="word",
+            highlightthickness=1, highlightbackground=C["border"],
+            state="disabled",
         )
         txt2.pack(fill="x")
 
         def _refresh_txt2():
             if kw2_var.get():
-                txt2.configure(state="normal", fg_color=C["input_bg"], text_color=C["text"])
+                txt2.configure(state="normal", bg=C["input_bg"], fg=C["text"])
                 p2_lbl.configure(text_color=C["subtext"])
             else:
-                txt2.configure(state="disabled", fg_color=C["accent_bg"], text_color=C["disabled"])
+                txt2.configure(state="disabled", bg=C["accent_bg"], fg=C["disabled"])
                 p2_lbl.configure(text_color=C["disabled"])
 
         def _refresh_enabled():
@@ -3065,10 +3268,11 @@ Remove-Item -Path (Split-Path $log) -Recurse -Force -ErrorAction SilentlyContinu
             _update_btn_style(cur_idx[0], selected=True)
             self._save_prefs()
 
+        def _refresh_guest():
+            working_guest[cur_idx[0]] = guest_var.get()
+
         def _btn_label(i):
-            dot = " ●" if (working[i] or working2[i]) else ""
-            off = "" if working_enabled[i] else "  ✗"
-            return f"{working_names[i]}{dot}{off}"
+            return working_names[i]
 
         def _update_btn_style(i, selected=False):
             is_on = working_enabled[i]
@@ -3078,24 +3282,33 @@ Remove-Item -Path (Split-Path $log) -Recurse -Force -ErrorAction SilentlyContinu
             else:
                 has = working[i] or working2[i]
                 fc = "transparent"
-                tc = (C["accent"] if has else C["subtext"]) if is_on else "#AAAAAA"
+                if not is_on:
+                    tc = "#AAAAAA"
+                elif working_guest[i]:
+                    tc = "#6FCF97"
+                else:
+                    tc = C["accent"] if has else C["subtext"]
             opt_btns[i].configure(text=_btn_label(i), fg_color=fc, text_color=tc)
 
-        def _switch_to(idx):
-            working_names[cur_idx[0]]   = name_entry.get().strip() or f"옵션 {cur_idx[0]+1}"
-            working[cur_idx[0]]         = txt1.get("1.0", "end").strip()
-            working2[cur_idx[0]]        = txt2.get("1.0", "end").strip()
-            working_kw2[cur_idx[0]]     = kw2_var.get()
-            working_topic[cur_idx[0]]   = topic_var.get()
-            working_collect[cur_idx[0]] = collect_var.get()
-            working_enabled[cur_idx[0]] = enabled_var.get()
+        def _switch_to(idx, save=True):
+            if save:
+                working_names[cur_idx[0]]   = name_entry.get().strip() or f"옵션 {cur_idx[0]+1}"
+                working[cur_idx[0]]         = txt1.get("1.0", "end").strip()
+                working2[cur_idx[0]]        = txt2.get("1.0", "end").strip()
+                if not working_collect[cur_idx[0]]:
+                    working_kw2[cur_idx[0]] = kw2_var.get()
+                working_topic[cur_idx[0]]   = topic_var.get()
+                working_collect[cur_idx[0]] = collect_var.get()
+                working_enabled[cur_idx[0]] = enabled_var.get()
+                working_guest[cur_idx[0]]   = guest_var.get()
             _update_btn_style(cur_idx[0], selected=False)
             cur_idx[0] = idx
             _update_btn_style(idx, selected=True)
             name_entry.delete(0, "end")
             name_entry.insert(0, working_names[idx])
             enabled_var.set(working_enabled[idx])
-            kw2_var.set(working_kw2[idx])
+            guest_var.set(working_guest[idx])
+            kw2_var.set(working_kw2[idx] if not working_collect[idx] else False)
             topic_var.set(working_topic[idx])
             collect_var.set(working_collect[idx])
             _refresh_txt2()
@@ -3111,6 +3324,7 @@ Remove-Item -Path (Split-Path $log) -Recurse -Force -ErrorAction SilentlyContinu
         opt_btns = []
         opt_rows = []
         opt_drag = {"idx": None, "start_y": 0}
+        _add_row_ref = [None]
 
         def _get_opt_drop_idx(y_root):
             for i, row_w in enumerate(opt_rows):
@@ -3161,8 +3375,11 @@ Remove-Item -Path (Split-Path $log) -Recurse -Force -ErrorAction SilentlyContinu
             working_topic[ci]   = topic_var.get()
             working_collect[ci] = collect_var.get()
             working_enabled[ci] = enabled_var.get()
-            for arr in [working, working2, working_names, working_enabled, working_kw2, working_topic, working_collect]:
+            for arr in [working, working2, working_names, working_enabled, working_kw2, working_topic, working_collect, working_guest]:
                 arr.insert(dst_idx, arr.pop(src_idx))
+            for arr in [self._kw_per_option, self._kw2_per_option, self._img_source_per_option]:
+                if src_idx < len(arr):
+                    arr.insert(min(dst_idx, len(arr)), arr.pop(src_idx))
             if ci == src_idx:
                 cur_idx[0] = dst_idx
             elif src_idx < ci <= dst_idx:
@@ -3174,7 +3391,7 @@ Remove-Item -Path (Split-Path $log) -Recurse -Force -ErrorAction SilentlyContinu
             name_entry.delete(0, "end")
             name_entry.insert(0, working_names[idx])
             enabled_var.set(working_enabled[idx])
-            kw2_var.set(working_kw2[idx])
+            kw2_var.set(working_kw2[idx] if not working_collect[idx] else False)
             topic_var.set(working_topic[idx])
             collect_var.set(working_collect[idx])
             txt1.delete("1.0", "end")
@@ -3186,12 +3403,56 @@ Remove-Item -Path (Split-Path $log) -Recurse -Force -ErrorAction SilentlyContinu
                 txt2.insert("1.0", working2[idx])
             _refresh_txt2()
 
+        def _save_current_fields():
+            ci = cur_idx[0]
+            if 0 <= ci < len(working):
+                working_names[ci]   = name_entry.get().strip() or f"옵션 {ci+1}"
+                working[ci]         = txt1.get("1.0", "end").strip()
+                working2[ci]        = txt2.get("1.0", "end").strip()
+                working_kw2[ci]     = kw2_var.get()
+                working_topic[ci]   = topic_var.get()
+                working_collect[ci] = collect_var.get()
+                working_enabled[ci] = enabled_var.get()
+                working_guest[ci]   = guest_var.get()
+
+        def _add_opt():
+            _save_current_fields()
+            n = len(working)
+            working.append(""); working2.append("")
+            working_names.append(f"옵션 {n+1}")
+            working_enabled.append(True); working_kw2.append(False)
+            working_topic.append(False); working_collect.append(False)
+            working_guest.append(False)
+            self._kw_per_option.append(""); self._kw2_per_option.append("")
+            self._img_source_per_option.append("AI")
+            _rebuild_opt_list()
+            _switch_to(n)
+
+        def _delete_opt(del_i):
+            if len(working) <= 1:
+                return
+            _save_current_fields()
+            for arr in [working, working2, working_names, working_enabled,
+                        working_kw2, working_topic, working_collect, working_guest]:
+                arr.pop(del_i)
+            for arr in [self._kw_per_option, self._kw2_per_option, self._img_source_per_option]:
+                if del_i < len(arr):
+                    arr.pop(del_i)
+            new_idx = cur_idx[0]
+            if new_idx >= len(working):
+                new_idx = len(working) - 1
+            elif new_idx > del_i:
+                new_idx -= 1
+            cur_idx[0] = new_idx
+            _rebuild_opt_list()
+            _switch_to(cur_idx[0], save=False)
+
         def _rebuild_opt_list():
             for r in opt_rows:
                 r.destroy()
             opt_rows.clear()
             opt_btns.clear()
-            for i in range(15):
+            for i in range(len(working)):
                 is_on = working_enabled[i]
                 has   = working[i] or working2[i]
                 row = ctk.CTkFrame(left, fg_color="transparent", corner_radius=6)
@@ -3206,6 +3467,14 @@ Remove-Item -Path (Split-Path $log) -Recurse -Force -ErrorAction SilentlyContinu
                 handle.bind("<Button-1>",        lambda e, n=i: _on_opt_drag_start(e, n))
                 handle.bind("<B1-Motion>",       _on_opt_drag_motion)
                 handle.bind("<ButtonRelease-1>", _on_opt_drag_end)
+                if i == cur_idx[0]:
+                    _tc = "white"
+                elif not is_on:
+                    _tc = "#AAAAAA"
+                elif working_guest[i]:
+                    _tc = "#6FCF97"
+                else:
+                    _tc = C["accent"] if has else C["subtext"]
                 b = ctk.CTkButton(
                     row,
                     text=_btn_label(i),
@@ -3214,14 +3483,34 @@ Remove-Item -Path (Split-Path $log) -Recurse -Force -ErrorAction SilentlyContinu
                     font=F_SM,
                     fg_color=C["accent"] if i == cur_idx[0] else "transparent",
                     hover_color="#D4DCF5",
-                    text_color="white" if i == cur_idx[0]
-                               else ((C["accent"] if has else C["subtext"]) if is_on else "#AAAAAA"),
+                    text_color=_tc,
                     corner_radius=6,
                     anchor="w",
                 )
+                del_btn = ctk.CTkButton(
+                    row, text="✕", command=lambda n=i: _delete_opt(n),
+                    width=22, height=22, font=("Malgun Gothic", 10, "bold"),
+                    fg_color="transparent", hover_color=C["err"],
+                    text_color=C["subtext"], corner_radius=4,
+                )
+                del_btn.pack(side="right", padx=(1, 2))
                 b.pack(side="left", fill="x", expand=True)
                 opt_btns.append(b)
                 opt_rows.append(row)
+            # + 추가 버튼 (매번 파괴 후 재생성)
+            if _add_row_ref[0]:
+                try: _add_row_ref[0].destroy()
+                except Exception: pass
+            add_row = ctk.CTkFrame(left, fg_color="transparent")
+            add_row.pack(padx=2, pady=(4, 2), fill="x")
+            ctk.CTkButton(
+                add_row, text="+ 옵션 추가", command=_add_opt,
+                height=26, font=F_SM,
+                fg_color="transparent", hover_color=C["accent_bg"],
+                text_color=C["accent"], corner_radius=6, border_width=1,
+                border_color=C["accent"],
+            ).pack(fill="x")
+            _add_row_ref[0] = add_row
 
         _rebuild_opt_list()
 
@@ -3233,24 +3522,7 @@ Remove-Item -Path (Split-Path $log) -Recurse -Force -ErrorAction SilentlyContinu
             txt2.insert("1.0", working2[cur_idx[0]])
         _refresh_txt2()
 
-        # ── 탭2 내용: 이미지 변형 설정 ──────────────────────────
-        _VAR_PARAMS = [
-            ("랜덤 크롭 범위",        "crop_pct",         0,  15,  0.5,  "{:.1f}%"),
-            ("밝기 조절",             "brightness_pct",  -30,  30,  0.5,  "{:.1f}%"),
-            ("대비 조절",             "contrast_pct",    -30,  30,  0.5,  "{:.1f}%"),
-            ("채도 조절",             "color_pct",       -30,  30,  0.5,  "{:.1f}%"),
-            ("회전 각도",             "rotation_deg",      0,  15,  0.1,  "{:.1f}°"),
-            ("픽셀 노이즈",           "noise",             0,  50,  1.0,  "{:.0f}"),
-            ("색조 이동",             "hue_shift",       -30,  30,  0.5,  "{:.1f}°"),
-            ("선명도(+샤픈/-블러)",   "sharpness",       -50,  50,  0.5,  "{:.1f}%"),
-            ("색온도(+따뜻/-차가)",   "temperature",     -20,  20,  0.5,  "{:.1f}"),
-            ("감마(+밝음/-어둠)",     "gamma",           -20,  20,  0.5,  "{:.1f}%"),
-            ("비율(+가로/-세로늘림)", "aspect_ratio",    -15,  15,  0.5,  "{:.1f}%"),
-            ("JPEG 재압축(품질감소)", "jpeg_quality",      0,  30,  0.5,  "{:.1f}%"),
-            ("미세 이동",             "translate",          0,  15,  0.5,  "{:.1f}px"),
-            ("RGB 채널 오프셋",       "rgb_offset",       -30,  30,  0.5,  "{:.1f}"),
-            ("워터마크 투명도(0=없음)","watermark",          0,  30,  0.1,  "{:.1f}%"),
-        ]
+        # ── 탭2~5 lazy build 공유 상태 ──────────────────────────────
         _VAR_DEFAULTS = {
             "crop_pct_min": 0.5,         "crop_pct_max": 3.5,
             "brightness_pct_min": -6.0,  "brightness_pct_max": 6.0,
@@ -3272,963 +3544,1178 @@ Remove-Item -Path (Split-Path $log) -Recurse -Force -ErrorAction SilentlyContinu
         slider_refs        = []
         slider_refs_picsum = []
         slider_refs_flickr = []
-
-        # 모드 선택 행
         var_mode = ["img_select"]
-        _t2_mode_row = ctk.CTkFrame(tab2_content, fg_color="transparent")
-        _t2_mode_row.pack(fill="x", pady=(0, 6))
-        _t2_img_panel    = ctk.CTkFrame(tab2_content, fg_color="transparent")
-        _t2_picsum_panel = ctk.CTkFrame(tab2_content, fg_color="transparent")
-        _t2_flickr_panel = ctk.CTkFrame(tab2_content, fg_color="transparent")
-        _t2_all_panels   = [_t2_img_panel, _t2_picsum_panel, _t2_flickr_panel]
-        _t2_all_btns     = []  # filled after button creation
+        _t2_built = [False]
+        _t3_save = [None]; _t3_built = [False]
+        _t4_save = [None]; _t4_built = [False]
+        _t5_save = [None]; _t5_built = [False]
 
-        def _switch_var_mode(mode):
-            var_mode[0] = mode
-            panel_map = {"img_select": _t2_img_panel, "picsum": _t2_picsum_panel, "flickr": _t2_flickr_panel}
-            for p in _t2_all_panels:
-                p.pack_forget()
-            panel_map[mode].pack(fill="both", expand=True)
-            active_fg = C["accent"]; active_tc = "white"
-            inactive_fg = C["accent_bg"]; inactive_tc = C["subtext"]
-            mode_order = ["img_select", "picsum", "flickr"]
-            for btn, m in zip(_t2_all_btns, mode_order):
-                if m == mode:
-                    btn.configure(fg_color=active_fg, text_color=active_tc)
-                else:
-                    btn.configure(fg_color=inactive_fg, text_color=inactive_tc)
+        def _build_tab2():
+            # ── 탭2 내용: 이미지 변형 설정 ──────────────────────────
+            _VAR_PARAMS = [
+                ("랜덤 크롭 범위",        "crop_pct",         0,  15,  0.5,  "{:.1f}%"),
+                ("밝기 조절",             "brightness_pct",  -30,  30,  0.5,  "{:.1f}%"),
+                ("대비 조절",             "contrast_pct",    -30,  30,  0.5,  "{:.1f}%"),
+                ("채도 조절",             "color_pct",       -30,  30,  0.5,  "{:.1f}%"),
+                ("회전 각도",             "rotation_deg",      0,  15,  0.1,  "{:.1f}°"),
+                ("픽셀 노이즈",           "noise",             0,  50,  1.0,  "{:.0f}"),
+                ("색조 이동",             "hue_shift",       -30,  30,  0.5,  "{:.1f}°"),
+                ("선명도(+샤픈/-블러)",   "sharpness",       -50,  50,  0.5,  "{:.1f}%"),
+                ("색온도(+따뜻/-차가)",   "temperature",     -20,  20,  0.5,  "{:.1f}"),
+                ("감마(+밝음/-어둠)",     "gamma",           -20,  20,  0.5,  "{:.1f}%"),
+                ("비율(+가로/-세로늘림)", "aspect_ratio",    -15,  15,  0.5,  "{:.1f}%"),
+                ("JPEG 재압축(품질감소)", "jpeg_quality",      0,  30,  0.5,  "{:.1f}%"),
+                ("미세 이동",             "translate",          0,  15,  0.5,  "{:.1f}px"),
+                ("RGB 채널 오프셋",       "rgb_offset",       -30,  30,  0.5,  "{:.1f}"),
+                ("워터마크 투명도(0=없음)","watermark",          0,  30,  0.1,  "{:.1f}%"),
+            ]
 
-        _t2_img_btn = ctk.CTkButton(
-            _t2_mode_row, text="이미지 선택", width=120, height=28,
-            fg_color=C["accent"], text_color="white", font=F_SMB,
-            hover_color=C["accent_h"], corner_radius=6,
-            command=lambda: _switch_var_mode("img_select"),
-        )
-        _t2_img_btn.pack(side="left", padx=(0, 4))
-        _t2_pcs_btn = ctk.CTkButton(
-            _t2_mode_row, text="픽숨", width=100, height=28,
-            fg_color=C["accent_bg"], text_color=C["subtext"], font=F_SMB,
-            hover_color=C["border"], corner_radius=6,
-            command=lambda: _switch_var_mode("picsum"),
-        )
-        _t2_pcs_btn.pack(side="left", padx=(0, 4))
-        _t2_flk_btn = ctk.CTkButton(
-            _t2_mode_row, text="플리커", width=100, height=28,
-            fg_color=C["accent_bg"], text_color=C["subtext"], font=F_SMB,
-            hover_color=C["border"], corner_radius=6,
-            command=lambda: _switch_var_mode("flickr"),
-        )
-        _t2_flk_btn.pack(side="left")
-        _t2_all_btns.extend([_t2_img_btn, _t2_pcs_btn, _t2_flk_btn])
+            # 모드 선택 행
+            _t2_mode_row = ctk.CTkFrame(tab2_content, fg_color="transparent")
+            _t2_mode_row.pack(fill="x", pady=(0, 6))
+            _t2_img_panel    = ctk.CTkFrame(tab2_content, fg_color="transparent")
+            _t2_picsum_panel = ctk.CTkFrame(tab2_content, fg_color="transparent")
+            _t2_flickr_panel = ctk.CTkFrame(tab2_content, fg_color="transparent")
+            _t2_all_panels   = [_t2_img_panel, _t2_picsum_panel, _t2_flickr_panel]
+            _t2_all_btns     = []  # filled after button creation
 
-        def _make_slider(parent, from_, to, step, init_val):
-            n_steps = round((to - from_) / step)
-            sl = ctk.CTkSlider(
-                parent, from_=from_, to=to, number_of_steps=n_steps,
-                fg_color=C["border"], progress_color=C["accent"],
-                button_color=C["accent"], button_hover_color=C["accent_h"],
-                height=12,
+            def _switch_var_mode(mode):
+                var_mode[0] = mode
+                panel_map = {"img_select": _t2_img_panel, "picsum": _t2_picsum_panel, "flickr": _t2_flickr_panel}
+                for p in _t2_all_panels:
+                    p.pack_forget()
+                panel_map[mode].pack(fill="both", expand=True)
+                active_fg = C["accent"]; active_tc = "white"
+                inactive_fg = C["accent_bg"]; inactive_tc = C["subtext"]
+                mode_order = ["img_select", "flickr", "picsum"]
+                for btn, m in zip(_t2_all_btns, mode_order):
+                    if m == mode:
+                        btn.configure(fg_color=active_fg, text_color=active_tc)
+                    else:
+                        btn.configure(fg_color=inactive_fg, text_color=inactive_tc)
+
+            _t2_img_btn = ctk.CTkButton(
+                _t2_mode_row, text="이미지 선택", width=120, height=28,
+                fg_color=C["accent"], text_color="white", font=F_SMB,
+                hover_color=C["accent_h"], corner_radius=6,
+                command=lambda: _switch_var_mode("img_select"),
             )
-            sl.set(init_val)
-            return sl
-
-        def _make_flip_row(parent, wd):
-            row = ctk.CTkFrame(parent, fg_color=C["accent_bg"], corner_radius=8)
-            row.pack(fill="x", pady=(0, 5))
-            hdr = ctk.CTkFrame(row, fg_color="transparent")
-            hdr.pack(fill="x", padx=8, pady=(5, 1))
-            _lbl(hdr, "좌우반전 확률", font=F_SMB, color=C["text"]).pack(side="left")
-            val_lbl = _lbl(hdr, f"{wd['hflip_prob']:.0f}%", font=("Malgun Gothic", 11, "bold"), color=C["accent"])
-            val_lbl.pack(side="right")
-            sl_row = ctk.CTkFrame(row, fg_color="transparent")
-            sl_row.pack(fill="x", padx=8, pady=(0, 6))
-            _lbl(sl_row, "확률", font=("Malgun Gothic", 11), color=C["subtext"], width=24).pack(side="left")
-            sl = _make_slider(sl_row, 0, 100, 1, wd["hflip_prob"])
-            sl.pack(side="left", fill="x", expand=True, padx=(3, 0))
-
-            def _on_flip(v, _d=wd, _vl=val_lbl):
-                rv = round(float(v))
-                _d["hflip_prob"] = float(rv)
-                _vl.configure(text=f"{rv}%")
-
-            sl.configure(command=_on_flip)
-
-        def _make_param_row(parent, lbl_text, base, from_, to, step, fmt, wd, sl_list):
-            k_min = f"{base}_min"
-            k_max = f"{base}_max"
-            row = ctk.CTkFrame(parent, fg_color=C["accent_bg"], corner_radius=8)
-            row.pack(fill="x", pady=(0, 5))
-            hdr = ctk.CTkFrame(row, fg_color="transparent")
-            hdr.pack(fill="x", padx=8, pady=(5, 1))
-            _lbl(hdr, lbl_text, font=F_SMB, color=C["text"]).pack(side="left")
-            range_lbl = _lbl(
-                hdr,
-                f"{fmt.format(wd[k_min])} ~ {fmt.format(wd[k_max])}",
-                font=("Malgun Gothic", 11, "bold"), color=C["accent"],
+            _t2_img_btn.pack(side="left", padx=(0, 4))
+            _t2_flk_btn = ctk.CTkButton(
+                _t2_mode_row, text="플리커", width=100, height=28,
+                fg_color=C["accent_bg"], text_color=C["subtext"], font=F_SMB,
+                hover_color=C["border"], corner_radius=6,
+                command=lambda: _switch_var_mode("flickr"),
             )
-            range_lbl.pack(side="right")
-            min_row = ctk.CTkFrame(row, fg_color="transparent")
-            min_row.pack(fill="x", padx=8, pady=(0, 1))
-            _lbl(min_row, "최소", font=("Malgun Gothic", 11), color=C["subtext"], width=24).pack(side="left")
-            sl_min = _make_slider(min_row, from_, to, step, wd[k_min])
-            sl_min.pack(side="left", fill="x", expand=True, padx=(3, 0))
-            max_row = ctk.CTkFrame(row, fg_color="transparent")
-            max_row.pack(fill="x", padx=8, pady=(0, 6))
-            _lbl(max_row, "최대", font=("Malgun Gothic", 11), color=C["subtext"], width=24).pack(side="left")
-            sl_max = _make_slider(max_row, from_, to, step, wd[k_max])
-            sl_max.pack(side="left", fill="x", expand=True, padx=(3, 0))
-            sl_list.append((sl_min, sl_max, k_min, k_max, range_lbl, fmt, step))
+            _t2_flk_btn.pack(side="left", padx=(0, 4))
+            _t2_pcs_btn = ctk.CTkButton(
+                _t2_mode_row, text="픽숨", width=100, height=28,
+                fg_color=C["accent_bg"], text_color=C["subtext"], font=F_SMB,
+                hover_color=C["border"], corner_radius=6,
+                command=lambda: _switch_var_mode("picsum"),
+            )
+            _t2_pcs_btn.pack(side="left")
+            _t2_all_btns.extend([_t2_img_btn, _t2_flk_btn, _t2_pcs_btn])
 
-            def _on_min(v, km=k_min, kx=k_max, sm=sl_min, f=fmt, s=step, rl=range_lbl, _d=wd):
-                rv = round(float(v) / s) * s
-                if rv > _d[kx]: rv = _d[kx]; sm.set(rv)
-                _d[km] = rv
-                rl.configure(text=f"{f.format(_d[km])} ~ {f.format(_d[kx])}")
+            def _make_slider(parent, from_, to, step, init_val):
+                n_steps = round((to - from_) / step)
+                sl = ctk.CTkSlider(
+                    parent, from_=from_, to=to, number_of_steps=n_steps,
+                    fg_color=C["border"], progress_color=C["accent"],
+                    button_color=C["accent"], button_hover_color=C["accent_h"],
+                    height=12,
+                )
+                sl.set(init_val)
+                return sl
 
-            def _on_max(v, km=k_min, kx=k_max, sx=sl_max, f=fmt, s=step, rl=range_lbl, _d=wd):
-                rv = round(float(v) / s) * s
-                if rv < _d[km]: rv = _d[km]; sx.set(rv)
-                _d[kx] = rv
-                rl.configure(text=f"{f.format(_d[km])} ~ {f.format(_d[kx])}")
+            def _make_flip_row(parent, wd):
+                row = ctk.CTkFrame(parent, fg_color=C["accent_bg"], corner_radius=8)
+                row.pack(fill="x", pady=(0, 5))
+                hdr = ctk.CTkFrame(row, fg_color="transparent")
+                hdr.pack(fill="x", padx=8, pady=(5, 1))
+                _lbl(hdr, "좌우반전 확률", font=F_SMB, color=C["text"]).pack(side="left")
+                val_lbl = _lbl(hdr, f"{wd['hflip_prob']:.0f}%", font=("Malgun Gothic", 11, "bold"), color=C["accent"])
+                val_lbl.pack(side="right")
+                sl_row = ctk.CTkFrame(row, fg_color="transparent")
+                sl_row.pack(fill="x", padx=8, pady=(0, 6))
+                _lbl(sl_row, "확률", font=("Malgun Gothic", 11), color=C["subtext"], width=24).pack(side="left")
+                sl = _make_slider(sl_row, 0, 100, 1, wd["hflip_prob"])
+                sl.pack(side="left", fill="x", expand=True, padx=(3, 0))
 
-            sl_min.configure(command=_on_min)
-            sl_max.configure(command=_on_max)
+                def _on_flip(v, _d=wd, _vl=val_lbl):
+                    rv = round(float(v))
+                    _d["hflip_prob"] = float(rv)
+                    _vl.configure(text=f"{rv}%")
 
-        # ── 이미지 선택 패널 ──────────────────────────────────
-        mw_row = ctk.CTkFrame(_t2_img_panel, fg_color=C["accent_bg"], corner_radius=8)
-        mw_row.pack(fill="x", pady=(4, 0), side="bottom")
-        mw_inner = ctk.CTkFrame(mw_row, fg_color="transparent")
-        mw_inner.pack(fill="x", padx=8, pady=6)
-        _lbl(mw_inner, "가로 최대 크기 (px, 가로 이미지만 / 0=사용 안 함)",
-             font=F_SMB, color=C["text"]).pack(side="left")
-        mw_entry = ctk.CTkEntry(
-            mw_inner, width=80, height=28, font=F,
-            fg_color=C["input_bg"], border_color=C["border"],
-            text_color=C["text"], corner_radius=6,
-        )
-        mw_entry.pack(side="right")
-        mw_entry.insert(0, str(self._max_width) if self._max_width else "0")
+                sl.configure(command=_on_flip)
 
-        _t2_col_scroll = ctk.CTkScrollableFrame(
-            _t2_img_panel, fg_color="transparent",
-            scrollbar_button_color=C["border"],
-        )
-        _t2_col_scroll.pack(fill="both", expand=True)
-        _t2_col_wrap = ctk.CTkFrame(_t2_col_scroll, fg_color="transparent")
-        _t2_col_wrap.pack(fill="both", expand=True)
-        _t2_col_wrap.columnconfigure(0, weight=1)
-        _t2_col_wrap.columnconfigure(1, weight=1)
-        _t2_col_wrap.columnconfigure(2, weight=1)
-        _t2_col_L = ctk.CTkFrame(_t2_col_wrap, fg_color="transparent")
-        _t2_col_L.grid(row=0, column=0, sticky="nsew", padx=(0, 3))
-        _t2_col_M = ctk.CTkFrame(_t2_col_wrap, fg_color="transparent")
-        _t2_col_M.grid(row=0, column=1, sticky="nsew", padx=(3, 3))
-        _t2_col_R = ctk.CTkFrame(_t2_col_wrap, fg_color="transparent")
-        _t2_col_R.grid(row=0, column=2, sticky="nsew", padx=(3, 0))
+            def _make_param_row(parent, lbl_text, base, from_, to, step, fmt, wd, sl_list):
+                k_min = f"{base}_min"
+                k_max = f"{base}_max"
+                row = ctk.CTkFrame(parent, fg_color=C["accent_bg"], corner_radius=8)
+                row.pack(fill="x", pady=(0, 5))
+                hdr = ctk.CTkFrame(row, fg_color="transparent")
+                hdr.pack(fill="x", padx=8, pady=(5, 1))
+                _lbl(hdr, lbl_text, font=F_SMB, color=C["text"]).pack(side="left")
+                range_lbl = _lbl(
+                    hdr,
+                    f"{fmt.format(wd[k_min])} ~ {fmt.format(wd[k_max])}",
+                    font=("Malgun Gothic", 11, "bold"), color=C["accent"],
+                )
+                range_lbl.pack(side="right")
+                min_row = ctk.CTkFrame(row, fg_color="transparent")
+                min_row.pack(fill="x", padx=8, pady=(0, 1))
+                _lbl(min_row, "최소", font=("Malgun Gothic", 11), color=C["subtext"], width=24).pack(side="left")
+                sl_min = _make_slider(min_row, from_, to, step, wd[k_min])
+                sl_min.pack(side="left", fill="x", expand=True, padx=(3, 0))
+                max_row = ctk.CTkFrame(row, fg_color="transparent")
+                max_row.pack(fill="x", padx=8, pady=(0, 6))
+                _lbl(max_row, "최대", font=("Malgun Gothic", 11), color=C["subtext"], width=24).pack(side="left")
+                sl_max = _make_slider(max_row, from_, to, step, wd[k_max])
+                sl_max.pack(side="left", fill="x", expand=True, padx=(3, 0))
+                sl_list.append((sl_min, sl_max, k_min, k_max, range_lbl, fmt, step))
 
-        n = len(_VAR_PARAMS)
-        third = (n + 2) // 3
-        for i, (lbl_text, base, from_, to, step, fmt) in enumerate(_VAR_PARAMS):
-            col = _t2_col_L if i < third else (_t2_col_M if i < third * 2 else _t2_col_R)
-            _make_param_row(col, lbl_text, base, from_, to, step, fmt, w_var, slider_refs)
-        _make_flip_row(_t2_col_L, w_var)
+                def _on_min(v, km=k_min, kx=k_max, sm=sl_min, f=fmt, s=step, rl=range_lbl, _d=wd):
+                    rv = round(float(v) / s) * s
+                    if rv > _d[kx]: rv = _d[kx]; sm.set(rv)
+                    _d[km] = rv
+                    rl.configure(text=f"{f.format(_d[km])} ~ {f.format(_d[kx])}")
 
-        # ── PICSUM 패널 ────────────────────────────────────────
-        _ps_size_row = ctk.CTkFrame(_t2_picsum_panel, fg_color=C["accent_bg"], corner_radius=8)
-        _ps_size_row.pack(fill="x", pady=(4, 0), side="bottom")
-        _ps_size_inner = ctk.CTkFrame(_ps_size_row, fg_color="transparent")
-        _ps_size_inner.pack(fill="x", padx=8, pady=6)
-        _lbl(_ps_size_inner, "이미지 크기 (가로 × 세로 px)",
-             font=F_SMB, color=C["text"]).pack(side="left")
-        _ps_h_entry = ctk.CTkEntry(
-            _ps_size_inner, width=70, height=28, font=F,
-            fg_color=C["input_bg"], border_color=C["border"],
-            text_color=C["text"], corner_radius=6,
-        )
-        _ps_h_entry.pack(side="right")
-        _ps_h_entry.insert(0, str(self._picsum_height))
-        _lbl(_ps_size_inner, "×", font=F_SMB, color=C["subtext"]).pack(side="right", padx=(4, 4))
-        _ps_w_entry = ctk.CTkEntry(
-            _ps_size_inner, width=70, height=28, font=F,
-            fg_color=C["input_bg"], border_color=C["border"],
-            text_color=C["text"], corner_radius=6,
-        )
-        _ps_w_entry.pack(side="right", padx=(0, 0))
-        _ps_w_entry.insert(0, str(self._picsum_width))
+                def _on_max(v, km=k_min, kx=k_max, sx=sl_max, f=fmt, s=step, rl=range_lbl, _d=wd):
+                    rv = round(float(v) / s) * s
+                    if rv < _d[km]: rv = _d[km]; sx.set(rv)
+                    _d[kx] = rv
+                    rl.configure(text=f"{f.format(_d[km])} ~ {f.format(_d[kx])}")
 
-        _t2p_col_scroll = ctk.CTkScrollableFrame(
-            _t2_picsum_panel, fg_color="transparent",
-            scrollbar_button_color=C["border"],
-        )
-        _t2p_col_scroll.pack(fill="both", expand=True)
-        _t2p_col_wrap = ctk.CTkFrame(_t2p_col_scroll, fg_color="transparent")
-        _t2p_col_wrap.pack(fill="both", expand=True)
-        _t2p_col_wrap.columnconfigure(0, weight=1)
-        _t2p_col_wrap.columnconfigure(1, weight=1)
-        _t2p_col_wrap.columnconfigure(2, weight=1)
-        _t2p_col_L = ctk.CTkFrame(_t2p_col_wrap, fg_color="transparent")
-        _t2p_col_L.grid(row=0, column=0, sticky="nsew", padx=(0, 3))
-        _t2p_col_M = ctk.CTkFrame(_t2p_col_wrap, fg_color="transparent")
-        _t2p_col_M.grid(row=0, column=1, sticky="nsew", padx=(3, 3))
-        _t2p_col_R = ctk.CTkFrame(_t2p_col_wrap, fg_color="transparent")
-        _t2p_col_R.grid(row=0, column=2, sticky="nsew", padx=(3, 0))
+                sl_min.configure(command=_on_min)
+                sl_max.configure(command=_on_max)
 
-        for i, (lbl_text, base, from_, to, step, fmt) in enumerate(_VAR_PARAMS):
-            col = _t2p_col_L if i < third else (_t2p_col_M if i < third * 2 else _t2p_col_R)
-            _make_param_row(col, lbl_text, base, from_, to, step, fmt, w_var_picsum, slider_refs_picsum)
-        _make_flip_row(_t2p_col_L, w_var_picsum)
+            # ── 이미지 선택 패널 ──────────────────────────────────
+            mw_row = ctk.CTkFrame(_t2_img_panel, fg_color=C["accent_bg"], corner_radius=8)
+            mw_row.pack(fill="x", pady=(4, 0), side="bottom")
+            mw_inner = ctk.CTkFrame(mw_row, fg_color="transparent")
+            mw_inner.pack(fill="x", padx=8, pady=6)
+            _lbl(mw_inner, "가로 최대 크기 (px, 가로 이미지만 / 0=사용 안 함)",
+                 font=F_SMB, color=C["text"]).pack(side="left")
+            mw_entry = _UndoEntry(
+                mw_inner, width=80, height=28, font=F,
+                fg_color=C["input_bg"], border_color=C["border"],
+                text_color=C["text"], corner_radius=6,
+            )
+            mw_entry.pack(side="right")
+            mw_entry.insert(0, str(self._max_width) if self._max_width else "0")
 
-        # ── FLICKR 패널 ────────────────────────────────────────
-        # 키워드 입력 (가장 아래)
-        _fl_kw_row = ctk.CTkFrame(_t2_flickr_panel, fg_color=C["accent_bg"], corner_radius=8)
-        _fl_kw_row.pack(fill="x", pady=(2, 0), side="bottom")
-        _fl_kw_inner = ctk.CTkFrame(_fl_kw_row, fg_color="transparent")
-        _fl_kw_inner.pack(fill="x", padx=8, pady=6)
-        _lbl(_fl_kw_inner, "검색 키워드 (비우면 랜덤 자동 선택)",
-             font=F_SMB, color=C["text"]).pack(side="left")
-        _fl_kw_entry = ctk.CTkEntry(
-            _fl_kw_inner, width=160, height=28, font=F,
-            fg_color=C["input_bg"], border_color=C["border"],
-            text_color=C["text"], corner_radius=6,
-            placeholder_text="nature, city, food ...",
-        )
-        _fl_kw_entry.pack(side="right")
-        if self._flickr_keyword:
-            _fl_kw_entry.insert(0, self._flickr_keyword)
+            _t2_col_scroll = ctk.CTkScrollableFrame(
+                _t2_img_panel, fg_color="transparent",
+                scrollbar_button_color=C["border"],
+            )
+            _t2_col_scroll.pack(fill="both", expand=True)
+            _t2_col_wrap = ctk.CTkFrame(_t2_col_scroll, fg_color="transparent")
+            _t2_col_wrap.pack(fill="both", expand=True)
+            _t2_col_wrap.columnconfigure(0, weight=1)
+            _t2_col_wrap.columnconfigure(1, weight=1)
+            _t2_col_wrap.columnconfigure(2, weight=1)
+            _t2_col_L = ctk.CTkFrame(_t2_col_wrap, fg_color="transparent")
+            _t2_col_L.grid(row=0, column=0, sticky="nsew", padx=(0, 3))
+            _t2_col_M = ctk.CTkFrame(_t2_col_wrap, fg_color="transparent")
+            _t2_col_M.grid(row=0, column=1, sticky="nsew", padx=(3, 3))
+            _t2_col_R = ctk.CTkFrame(_t2_col_wrap, fg_color="transparent")
+            _t2_col_R.grid(row=0, column=2, sticky="nsew", padx=(3, 0))
 
-        # 이미지 크기 (키워드 위)
-        _fl_size_row = ctk.CTkFrame(_t2_flickr_panel, fg_color=C["accent_bg"], corner_radius=8)
-        _fl_size_row.pack(fill="x", pady=(4, 2), side="bottom")
-        _fl_size_inner = ctk.CTkFrame(_fl_size_row, fg_color="transparent")
-        _fl_size_inner.pack(fill="x", padx=8, pady=6)
-        _lbl(_fl_size_inner, "이미지 크기 (가로 × 세로 px)",
-             font=F_SMB, color=C["text"]).pack(side="left")
-        _fl_h_entry = ctk.CTkEntry(
-            _fl_size_inner, width=70, height=28, font=F,
-            fg_color=C["input_bg"], border_color=C["border"],
-            text_color=C["text"], corner_radius=6,
-        )
-        _fl_h_entry.pack(side="right")
-        _fl_h_entry.insert(0, str(self._flickr_height))
-        _lbl(_fl_size_inner, "×", font=F_SMB, color=C["subtext"]).pack(side="right", padx=(4, 4))
-        _fl_w_entry = ctk.CTkEntry(
-            _fl_size_inner, width=70, height=28, font=F,
-            fg_color=C["input_bg"], border_color=C["border"],
-            text_color=C["text"], corner_radius=6,
-        )
-        _fl_w_entry.pack(side="right", padx=(0, 0))
-        _fl_w_entry.insert(0, str(self._flickr_width))
+            n = len(_VAR_PARAMS)
+            third = (n + 2) // 3
+            for i, (lbl_text, base, from_, to, step, fmt) in enumerate(_VAR_PARAMS):
+                col = _t2_col_L if i < third else (_t2_col_M if i < third * 2 else _t2_col_R)
+                _make_param_row(col, lbl_text, base, from_, to, step, fmt, w_var, slider_refs)
+            _make_flip_row(_t2_col_L, w_var)
 
-        _t2f_col_scroll = ctk.CTkScrollableFrame(
-            _t2_flickr_panel, fg_color="transparent",
-            scrollbar_button_color=C["border"],
-        )
-        _t2f_col_scroll.pack(fill="both", expand=True)
-        _t2f_col_wrap = ctk.CTkFrame(_t2f_col_scroll, fg_color="transparent")
-        _t2f_col_wrap.pack(fill="both", expand=True)
-        _t2f_col_wrap.columnconfigure(0, weight=1)
-        _t2f_col_wrap.columnconfigure(1, weight=1)
-        _t2f_col_wrap.columnconfigure(2, weight=1)
-        _t2f_col_L = ctk.CTkFrame(_t2f_col_wrap, fg_color="transparent")
-        _t2f_col_L.grid(row=0, column=0, sticky="nsew", padx=(0, 3))
-        _t2f_col_M = ctk.CTkFrame(_t2f_col_wrap, fg_color="transparent")
-        _t2f_col_M.grid(row=0, column=1, sticky="nsew", padx=(3, 3))
-        _t2f_col_R = ctk.CTkFrame(_t2f_col_wrap, fg_color="transparent")
-        _t2f_col_R.grid(row=0, column=2, sticky="nsew", padx=(3, 0))
+            # ── PICSUM 패널 ────────────────────────────────────────
+            _ps_size_row = ctk.CTkFrame(_t2_picsum_panel, fg_color=C["accent_bg"], corner_radius=8)
+            _ps_size_row.pack(fill="x", pady=(4, 0), side="bottom")
+            _ps_size_inner = ctk.CTkFrame(_ps_size_row, fg_color="transparent")
+            _ps_size_inner.pack(fill="x", padx=8, pady=6)
+            _lbl(_ps_size_inner, "이미지 크기 (가로 × 세로 px)",
+                 font=F_SMB, color=C["text"]).pack(side="left")
+            _ps_h_entry = _UndoEntry(
+                _ps_size_inner, width=70, height=28, font=F,
+                fg_color=C["input_bg"], border_color=C["border"],
+                text_color=C["text"], corner_radius=6,
+            )
+            _ps_h_entry.pack(side="right")
+            _ps_h_entry.insert(0, str(self._picsum_height))
+            _lbl(_ps_size_inner, "×", font=F_SMB, color=C["subtext"]).pack(side="right", padx=(4, 4))
+            _ps_w_entry = _UndoEntry(
+                _ps_size_inner, width=70, height=28, font=F,
+                fg_color=C["input_bg"], border_color=C["border"],
+                text_color=C["text"], corner_radius=6,
+            )
+            _ps_w_entry.pack(side="right", padx=(0, 0))
+            _ps_w_entry.insert(0, str(self._picsum_width))
 
-        for i, (lbl_text, base, from_, to, step, fmt) in enumerate(_VAR_PARAMS):
-            col = _t2f_col_L if i < third else (_t2f_col_M if i < third * 2 else _t2f_col_R)
-            _make_param_row(col, lbl_text, base, from_, to, step, fmt, w_var_flickr, slider_refs_flickr)
-        _make_flip_row(_t2f_col_L, w_var_flickr)
+            _t2p_col_scroll = ctk.CTkScrollableFrame(
+                _t2_picsum_panel, fg_color="transparent",
+                scrollbar_button_color=C["border"],
+            )
+            _t2p_col_scroll.pack(fill="both", expand=True)
+            _t2p_col_wrap = ctk.CTkFrame(_t2p_col_scroll, fg_color="transparent")
+            _t2p_col_wrap.pack(fill="both", expand=True)
+            _t2p_col_wrap.columnconfigure(0, weight=1)
+            _t2p_col_wrap.columnconfigure(1, weight=1)
+            _t2p_col_wrap.columnconfigure(2, weight=1)
+            _t2p_col_L = ctk.CTkFrame(_t2p_col_wrap, fg_color="transparent")
+            _t2p_col_L.grid(row=0, column=0, sticky="nsew", padx=(0, 3))
+            _t2p_col_M = ctk.CTkFrame(_t2p_col_wrap, fg_color="transparent")
+            _t2p_col_M.grid(row=0, column=1, sticky="nsew", padx=(3, 3))
+            _t2p_col_R = ctk.CTkFrame(_t2p_col_wrap, fg_color="transparent")
+            _t2p_col_R.grid(row=0, column=2, sticky="nsew", padx=(3, 0))
 
-        # 초기 모드: 이미지 선택
-        _t2_img_panel.pack(fill="both", expand=True)
+            for i, (lbl_text, base, from_, to, step, fmt) in enumerate(_VAR_PARAMS):
+                col = _t2p_col_L if i < third else (_t2p_col_M if i < third * 2 else _t2p_col_R)
+                _make_param_row(col, lbl_text, base, from_, to, step, fmt, w_var_picsum, slider_refs_picsum)
+            _make_flip_row(_t2p_col_L, w_var_picsum)
 
-        # ── 탭3: 허용 MAC 관리 ───────────────────────────
-        mac_entries_work = [dict(e) for e in self._mac_entries]
-        current_mac = _get_mac_address().upper()
+            # ── FLICKR 패널 ────────────────────────────────────────
+            # 키워드 입력 (가장 아래)
+            _fl_kw_row = ctk.CTkFrame(_t2_flickr_panel, fg_color=C["accent_bg"], corner_radius=8)
+            _fl_kw_row.pack(fill="x", pady=(2, 0), side="bottom")
+            _fl_kw_inner = ctk.CTkFrame(_fl_kw_row, fg_color="transparent")
+            _fl_kw_inner.pack(fill="x", padx=8, pady=6)
+            _lbl(_fl_kw_inner, "검색 키워드 (비우면 랜덤 자동 선택)",
+                 font=F_SMB, color=C["text"]).pack(side="left")
+            _fl_kw_entry = _UndoEntry(
+                _fl_kw_inner, width=160, height=28, font=F,
+                fg_color=C["input_bg"], border_color=C["border"],
+                text_color=C["text"], corner_radius=6,
+                placeholder_text="nature, city, food ...",
+            )
+            _fl_kw_entry.pack(side="right")
+            if self._flickr_keyword:
+                _fl_kw_entry.insert(0, self._flickr_keyword)
 
-        _lbl(tab3_content, "🔒 허용 MAC 주소 관리", font=F_B).pack(anchor="w", pady=(8, 2))
-        _lbl(tab3_content, "등록된 MAC만 실행 가능. 비어있으면 모든 PC 허용. 저장 후 Gist 업로드하면 자동 동기화.",
-             font=F_SM, color=C["subtext"]).pack(anchor="w", pady=(0, 6))
+            # 이미지 크기 (키워드 위)
+            _fl_size_row = ctk.CTkFrame(_t2_flickr_panel, fg_color=C["accent_bg"], corner_radius=8)
+            _fl_size_row.pack(fill="x", pady=(4, 2), side="bottom")
+            _fl_size_inner = ctk.CTkFrame(_fl_size_row, fg_color="transparent")
+            _fl_size_inner.pack(fill="x", padx=8, pady=6)
+            _lbl(_fl_size_inner, "이미지 크기 (가로 × 세로 px)",
+                 font=F_SMB, color=C["text"]).pack(side="left")
+            _fl_h_entry = _UndoEntry(
+                _fl_size_inner, width=70, height=28, font=F,
+                fg_color=C["input_bg"], border_color=C["border"],
+                text_color=C["text"], corner_radius=6,
+            )
+            _fl_h_entry.pack(side="right")
+            _fl_h_entry.insert(0, str(self._flickr_height))
+            _lbl(_fl_size_inner, "×", font=F_SMB, color=C["subtext"]).pack(side="right", padx=(4, 4))
+            _fl_w_entry = _UndoEntry(
+                _fl_size_inner, width=70, height=28, font=F,
+                fg_color=C["input_bg"], border_color=C["border"],
+                text_color=C["text"], corner_radius=6,
+            )
+            _fl_w_entry.pack(side="right", padx=(0, 0))
+            _fl_w_entry.insert(0, str(self._flickr_width))
 
-        # 현재 PC MAC 표시
-        cur_frame = ctk.CTkFrame(tab3_content, fg_color=C["accent_bg"], corner_radius=8)
-        cur_frame.pack(fill="x", pady=(0, 8))
-        _lbl(cur_frame, "이 PC MAC:", font=F_SMB, color=C["subtext"]).pack(side="left", padx=(12,6), pady=8)
-        cur_mac_lbl = ctk.CTkEntry(cur_frame, height=26, font=F_B, fg_color="transparent",
-                                   border_width=0, text_color=C["accent"], width=170)
-        cur_mac_lbl.insert(0, current_mac)
-        cur_mac_lbl.configure(state="readonly")
-        cur_mac_lbl.pack(side="left", pady=8)
+            _t2f_col_scroll = ctk.CTkScrollableFrame(
+                _t2_flickr_panel, fg_color="transparent",
+                scrollbar_button_color=C["border"],
+            )
+            _t2f_col_scroll.pack(fill="both", expand=True)
+            _t2f_col_wrap = ctk.CTkFrame(_t2f_col_scroll, fg_color="transparent")
+            _t2f_col_wrap.pack(fill="both", expand=True)
+            _t2f_col_wrap.columnconfigure(0, weight=1)
+            _t2f_col_wrap.columnconfigure(1, weight=1)
+            _t2f_col_wrap.columnconfigure(2, weight=1)
+            _t2f_col_L = ctk.CTkFrame(_t2f_col_wrap, fg_color="transparent")
+            _t2f_col_L.grid(row=0, column=0, sticky="nsew", padx=(0, 3))
+            _t2f_col_M = ctk.CTkFrame(_t2f_col_wrap, fg_color="transparent")
+            _t2f_col_M.grid(row=0, column=1, sticky="nsew", padx=(3, 3))
+            _t2f_col_R = ctk.CTkFrame(_t2f_col_wrap, fg_color="transparent")
+            _t2f_col_R.grid(row=0, column=2, sticky="nsew", padx=(3, 0))
 
-        cur_note_entry = ctk.CTkEntry(cur_frame, height=26, font=F_SM, width=130,
+            for i, (lbl_text, base, from_, to, step, fmt) in enumerate(_VAR_PARAMS):
+                col = _t2f_col_L if i < third else (_t2f_col_M if i < third * 2 else _t2f_col_R)
+                _make_param_row(col, lbl_text, base, from_, to, step, fmt, w_var_flickr, slider_refs_flickr)
+            _make_flip_row(_t2f_col_L, w_var_flickr)
+
+            # 초기 모드: 이미지 선택
+            _t2_img_panel.pack(fill="both", expand=True)
+
+
+        def _build_tab3():
+            # ── 탭3: 허용 MAC 관리 ───────────────────────────
+            mac_entries_work = [dict(e) for e in self._mac_entries]
+            current_mac = _get_mac_address().upper()
+
+            _lbl(tab3_content, "🔒 허용 MAC 주소 관리", font=F_B).pack(anchor="w", pady=(8, 2))
+            _lbl(tab3_content, "등록된 MAC만 실행 가능. 비어있으면 모든 PC 허용. 저장 후 Gist 업로드하면 자동 동기화.",
+                 font=F_SM, color=C["subtext"]).pack(anchor="w", pady=(0, 6))
+
+            # 현재 PC MAC 표시
+            cur_frame = ctk.CTkFrame(tab3_content, fg_color=C["accent_bg"], corner_radius=8)
+            cur_frame.pack(fill="x", pady=(0, 8))
+            _lbl(cur_frame, "이 PC MAC:", font=F_SMB, color=C["subtext"]).pack(side="left", padx=(12,6), pady=8)
+            cur_mac_lbl = _UndoEntry(cur_frame, height=26, font=F_B, fg_color="transparent",
+                                       border_width=0, text_color=C["accent"], width=170)
+            cur_mac_lbl.insert(0, current_mac)
+            cur_mac_lbl.configure(state="readonly")
+            cur_mac_lbl.pack(side="left", pady=8)
+
+
+            # 수동 입력 행
+            add_row = ctk.CTkFrame(tab3_content, fg_color="transparent")
+            add_row.pack(fill="x", pady=(0, 6))
+            mac_entry = _UndoEntry(add_row, height=30, font=F_SM,
+                                     fg_color=C["input_bg"], border_color=C["border"],
+                                     text_color=C["text"], corner_radius=7, width=170,
+                                     placeholder_text="XX:XX:XX:XX:XX:XX 또는 XX-XX-...")
+            mac_entry.pack(side="left", padx=(0, 6))
+            note_entry = _UndoEntry(add_row, height=30, font=F_SM,
                                       fg_color=C["input_bg"], border_color=C["border"],
-                                      text_color=C["text"], corner_radius=6,
-                                      placeholder_text="비고")
-        cur_note_entry.pack(side="left", padx=(6,6), pady=8)
+                                      text_color=C["text"], corner_radius=7,
+                                      placeholder_text="비고 (이름/장소)")
+            note_entry.pack(side="left", fill="x", expand=True, padx=(0, 6))
 
-        def _add_current():
-            existing = {e["mac"] for e in mac_entries_work}
-            if current_mac not in existing:
-                mac_entries_work.append({"mac": current_mac, "note": cur_note_entry.get().strip()})
-                _refresh_list()
-
-        ctk.CTkButton(cur_frame, text="+ 추가", command=_add_current,
-                      width=70, height=26, font=F_SM,
-                      fg_color=C["ok"], hover_color="#1E7A55",
-                      text_color="white", corner_radius=6).pack(side="right", padx=8, pady=8)
-
-        # 수동 입력 행
-        add_row = ctk.CTkFrame(tab3_content, fg_color="transparent")
-        add_row.pack(fill="x", pady=(0, 6))
-        mac_entry = ctk.CTkEntry(add_row, height=30, font=F_SM,
-                                 fg_color=C["input_bg"], border_color=C["border"],
-                                 text_color=C["text"], corner_radius=7, width=170,
-                                 placeholder_text="XX:XX:XX:XX:XX:XX 또는 XX-XX-...")
-        mac_entry.pack(side="left", padx=(0, 6))
-        note_entry = ctk.CTkEntry(add_row, height=30, font=F_SM,
-                                  fg_color=C["input_bg"], border_color=C["border"],
-                                  text_color=C["text"], corner_radius=7,
-                                  placeholder_text="비고 (이름/장소)")
-        note_entry.pack(side="left", fill="x", expand=True, padx=(0, 6))
-
-        def _add_manual():
-            raw = mac_entry.get().strip().upper().replace("-", ":")
-            if len(raw) == 17 and raw.count(":") == 5:
-                macs = [e["mac"] for e in mac_entries_work]
-                if raw not in macs:
-                    mac_entries_work.append({"mac": raw, "note": note_entry.get().strip()})
-                    _refresh_list()
-                mac_entry.delete(0, "end")
-                note_entry.delete(0, "end")
-            else:
-                mac_entry.configure(border_color=C["err"])
-                dlg.after(1000, lambda: mac_entry.configure(border_color=C["border"]))
-
-        ctk.CTkButton(add_row, text="추가", command=_add_manual,
-                      width=60, height=30, font=F_SMB,
-                      fg_color=C["accent"], hover_color=C["accent_h"],
-                      text_color="white", corner_radius=7).pack(side="left")
-
-        # MAC 목록
-        list_frame = ctk.CTkScrollableFrame(tab3_content, fg_color=C["card"],
-                                             border_color=C["border"], border_width=1,
-                                             corner_radius=8)
-        list_frame.pack(fill="both", expand=True, pady=(0, 6))
-
-        def _refresh_list():
-            for w in list_frame.winfo_children():
-                w.destroy()
-            if not mac_entries_work:
-                _lbl(list_frame, "등록된 MAC 없음 (모든 PC 허용 상태)",
-                     font=F_SM, color=C["subtext"]).pack(pady=20)
-                return
-            for entry in list(mac_entries_work):
-                m, note = entry["mac"], entry.get("note", "")
-                row = ctk.CTkFrame(list_frame, fg_color="transparent")
-                row.pack(fill="x", pady=1)
-                is_cur = (m == current_mac)
-                color = C["ok"] if is_cur else C["text"]
-                prefix = "✅ " if is_cur else "   "
-                _lbl(row, f"{prefix}{m}", font=F_SM, color=color).pack(side="left", padx=(8,4))
-
-                note_var_entry = ctk.CTkEntry(row, height=24, font=F_SM, width=140,
-                                              fg_color=C["input_bg"], border_color=C["border"],
-                                              text_color=C["subtext"], corner_radius=5)
-                note_var_entry.insert(0, note)
-                note_var_entry.pack(side="left", padx=(0,4))
-
-                def _update_note(e, entry=entry, nve=note_var_entry):
-                    entry["note"] = nve.get().strip()
-
-                note_var_entry.bind("<FocusOut>", _update_note)
-                note_var_entry.bind("<Return>",   _update_note)
-
-                def _del(entry=entry):
-                    if entry in mac_entries_work:
-                        mac_entries_work.remove(entry)
-                    _refresh_list()
-                ctk.CTkButton(row, text="삭제", command=_del,
-                              width=46, height=24, font=F_SM,
-                              fg_color=C["err"], hover_color="#A03030",
-                              text_color="white", corner_radius=5).pack(side="right", padx=6)
-
-        _refresh_list()
-
-        def _save_mac():
-            self._mac_entries = [dict(e) for e in mac_entries_work]
-            self._save_prefs()
-            save_notify.configure(text="✅ 저장됨")
-            dlg.after(2000, lambda: save_notify.configure(text=""))
-
-        # ── 탭4 내용: 주제 목록 관리 ─────────────────────
-        working_topics = {k: list(v) for k, v in self._topic_lists.items()}
-
-        # 행 그룹 초기화 – 저장된 그룹이 없으면 전체를 1행으로
-        working_rows: list = []
-        if self._topic_rows:
-            for _r in self._topic_rows:
-                _valid = [k for k in _r if k in working_topics]
-                if _valid:
-                    working_rows.append(_valid)
-            _all_g = {k for _r in working_rows for k in _r}
-            _ung = [k for k in working_topics if k not in _all_g]
-            if _ung:
-                if working_rows:
-                    working_rows[-1].extend(_ung)
+            def _add_manual():
+                raw = mac_entry.get().strip().upper().replace("-", ":")
+                if len(raw) == 17 and raw.count(":") == 5:
+                    macs = [e["mac"] for e in mac_entries_work]
+                    if raw not in macs:
+                        mac_entries_work.append({"mac": raw, "note": note_entry.get().strip()})
+                        _refresh_list()
+                    mac_entry.delete(0, "end")
+                    note_entry.delete(0, "end")
                 else:
-                    working_rows.append(_ung)
-        if not working_rows:
-            working_rows.append(list(working_topics.keys()))
-        # 항상 정확히 3개 행 유지
-        while len(working_rows) < 3:
-            working_rows.append([])
-        while len(working_rows) > 3:
-            working_rows[2].extend(working_rows.pop(3))
+                    mac_entry.configure(border_color=C["err"])
+                    dlg.after(1000, lambda: mac_entry.configure(border_color=C["border"]))
 
-        sel_kw = [None]
-        sel_kw_row = [None]
+            ctk.CTkButton(add_row, text="추가", command=_add_manual,
+                          width=60, height=30, font=F_SMB,
+                          fg_color=C["accent"], hover_color=C["accent_h"],
+                          text_color="white", corner_radius=7).pack(side="left")
 
-        tl_left = ctk.CTkFrame(tab4_content, width=440, fg_color=C["accent_bg"], corner_radius=8)
-        tl_left.pack(side="left", fill="y", padx=(0, 10))
-        tl_left.pack_propagate(False)
+            # MAC 목록
+            list_frame = ctk.CTkScrollableFrame(tab3_content, fg_color=C["card"],
+                                                 border_color=C["border"], border_width=1,
+                                                 corner_radius=8)
+            list_frame.pack(fill="both", expand=True, pady=(0, 6))
 
-        tl_right = ctk.CTkFrame(tab4_content, fg_color="transparent")
-        tl_right.pack(side="left", fill="both", expand=True)
+            def _refresh_list():
+                for w in list_frame.winfo_children():
+                    w.destroy()
+                if not mac_entries_work:
+                    _lbl(list_frame, "등록된 MAC 없음 (모든 PC 허용 상태)",
+                         font=F_SM, color=C["subtext"]).pack(pady=20)
+                    return
+                for entry in list(mac_entries_work):
+                    m, note = entry["mac"], entry.get("note", "")
+                    row = ctk.CTkFrame(list_frame, fg_color="transparent")
+                    row.pack(fill="x", pady=1)
+                    is_cur = (m == current_mac)
+                    color = C["ok"] if is_cur else C["text"]
+                    prefix = "✅ " if is_cur else "   "
+                    _lbl(row, f"{prefix}{m}", font=F_SM, color=color).pack(side="left", padx=(8,4))
 
-        kw_scroll = ctk.CTkScrollableFrame(tl_left, fg_color="transparent",
-                                            scrollbar_button_color=C["border"])
-        kw_scroll.pack(fill="both", expand=True, padx=4, pady=(4, 0))
+                    note_var_entry = _UndoEntry(row, height=24, font=F_SM, width=140,
+                                                  fg_color=C["input_bg"], border_color=C["border"],
+                                                  text_color=C["subtext"], corner_radius=5)
+                    note_var_entry.insert(0, note)
+                    note_var_entry.pack(side="left", padx=(0,4))
 
-        tl_top = ctk.CTkFrame(tl_right, fg_color="transparent")
-        tl_top.pack(fill="x", pady=(0, 6))
-        sel_kw_lbl = _lbl(tl_top, "키워드를 선택하세요", font=F_B, color=C["text"])
-        sel_kw_lbl.pack(side="left")
-        topic_count_lbl = _lbl(tl_top, "", font=F_SM, color=C["subtext"])
-        topic_count_lbl.pack(side="left", padx=(8, 0))
+                    def _update_note(e, entry=entry, nve=note_var_entry):
+                        entry["note"] = nve.get().strip()
 
-        tl_txt = ctk.CTkTextbox(
-            tl_right, font=F_SM,
-            fg_color=C["input_bg"], border_color=C["border"],
-            text_color=C["text"], corner_radius=8, border_width=1,
-            wrap="word",
-        )
-        tl_txt.pack(fill="both", expand=True)
+                    note_var_entry.bind("<FocusOut>", _update_note)
+                    note_var_entry.bind("<Return>",   _update_note)
 
-        tl_btn_row = ctk.CTkFrame(tl_right, fg_color="transparent")
-        tl_btn_row.pack(fill="x", pady=(6, 0))
+                    guest_val = ctk.BooleanVar(value=bool(entry.get("guest", False)))
+                    def _toggle_guest(entry=entry, gv=guest_val):
+                        entry["guest"] = gv.get()
+                    ctk.CTkCheckBox(row, text="게스트",
+                        variable=guest_val,
+                        command=lambda entry=entry, gv=guest_val: _toggle_guest(entry, gv),
+                        font=F_SM, text_color=C["text"],
+                        fg_color=C["accent"], hover_color=C["accent_h"],
+                        checkmark_color="white", width=16, height=16,
+                    ).pack(side="left", padx=(6, 4))
 
-        kw_btns = []
+                    def _del(entry=entry):
+                        if entry in mac_entries_work:
+                            mac_entries_work.remove(entry)
+                        _refresh_list()
+                    ctk.CTkButton(row, text="삭제", command=_del,
+                                  width=46, height=24, font=F_SM,
+                                  fg_color=C["err"], hover_color="#A03030",
+                                  text_color="white", corner_radius=5).pack(side="left", padx=(0, 4))
 
-        def _parse_topics(text: str) -> list:
-            items = [t.strip() for t in text.replace('\n', ';').split(';') if t.strip()]
-            return items
+            _refresh_list()
 
-        chip_drag = {
-            "item": None, "group_idx": None,
-            "target_item": None, "target_group": None,
-            "chip_map": {},
-            "sx": 0, "sy": 0,
-        }
+            def _save_mac():
+                self._mac_entries = [dict(e) for e in mac_entries_work]
+                self._save_prefs()
+                save_notify.configure(text="✅ 저장됨")
+                dlg.after(2000, lambda: save_notify.configure(text=""))
 
-        def _chip_est_w(text):
-            cw = sum(14 if ord(c) > 127 else 8 for c in text)
-            return max(50, cw + 24)
+            _t3_save[0] = _save_mac
 
-        def _chip_drag_start(event, item, g_idx):
-            chip_drag["item"] = item
-            chip_drag["group_idx"] = g_idx
-            chip_drag["target_item"] = None
-            chip_drag["target_group"] = None
-            chip_drag["sx"] = event.x_root
-            chip_drag["sy"] = event.y_root
+        def _build_tab4():
+            # ── 탭4 내용: 주제 목록 관리 ─────────────────────
+            working_topics = {k: list(v) for k, v in self._topic_lists.items()}
 
-        def _chip_find_nearest(x_root, y_root):
-            best_item, best_group, best_dist = None, None, float("inf")
-            for name, (chip, gidx) in chip_drag["chip_map"].items():
-                if name == chip_drag["item"]:
-                    continue
-                try:
-                    cx = chip.winfo_rootx() + chip.winfo_width() // 2
-                    cy = chip.winfo_rooty() + chip.winfo_height() // 2
-                    dist = abs(cx - x_root) + abs(cy - y_root) * 1.5
-                    if dist < best_dist:
-                        best_dist, best_item, best_group = dist, name, gidx
-                except Exception:
-                    pass
-            return best_item, best_group
+            # 행 그룹 초기화 – 저장된 그룹이 없으면 전체를 1행으로
+            working_rows: list = []
+            if self._topic_rows:
+                for _r in self._topic_rows:
+                    _valid = [k for k in _r if k in working_topics]
+                    if _valid:
+                        working_rows.append(_valid)
+                _all_g = {k for _r in working_rows for k in _r}
+                _ung = [k for k in working_topics if k not in _all_g]
+                if _ung:
+                    if working_rows:
+                        working_rows[-1].extend(_ung)
+                    else:
+                        working_rows.append(_ung)
+            if not working_rows:
+                working_rows.append(list(working_topics.keys()))
+            # 항상 정확히 3개 행 유지
+            while len(working_rows) < 3:
+                working_rows.append([])
+            while len(working_rows) > 3:
+                working_rows[2].extend(working_rows.pop(3))
 
-        def _chip_drag_motion(event):
-            target_item, target_group = _chip_find_nearest(event.x_root, event.y_root)
-            old_item = chip_drag["target_item"]
-            if target_item != old_item:
-                if old_item and old_item in chip_drag["chip_map"]:
-                    chip_drag["chip_map"][old_item][0].configure(
-                        fg_color=C["accent"] if old_item == sel_kw[0] else C["accent_bg"])
+            sel_kw = [None]
+            sel_kw_row = [None]
+
+            tl_left = ctk.CTkFrame(tab4_content, width=440, fg_color=C["accent_bg"], corner_radius=8)
+            tl_left.pack(side="left", fill="y", padx=(0, 10))
+            tl_left.pack_propagate(False)
+
+            tl_right = ctk.CTkFrame(tab4_content, fg_color="transparent")
+            tl_right.pack(side="left", fill="both", expand=True)
+
+            kw_scroll = ctk.CTkScrollableFrame(tl_left, fg_color="transparent",
+                                                scrollbar_button_color=C["border"])
+            kw_scroll.pack(fill="both", expand=True, padx=4, pady=(4, 0))
+
+            tl_top = ctk.CTkFrame(tl_right, fg_color="transparent")
+            tl_top.pack(fill="x", pady=(0, 6))
+            sel_kw_lbl = _lbl(tl_top, "키워드를 선택하세요", font=F_B, color=C["text"])
+            sel_kw_lbl.pack(side="left")
+            topic_count_lbl = _lbl(tl_top, "", font=F_SM, color=C["subtext"])
+            topic_count_lbl.pack(side="left", padx=(8, 0))
+
+            tl_txt = tk.Text(
+                tl_right, font=F_SM,
+                bg=C["input_bg"], fg=C["text"],
+                insertbackground=C["text"],
+                relief="flat", bd=0, padx=6, pady=4, wrap="word",
+                highlightthickness=1, highlightbackground=C["border"],
+            )
+            tl_txt.pack(fill="both", expand=True)
+
+            tl_btn_row = ctk.CTkFrame(tl_right, fg_color="transparent")
+            tl_btn_row.pack(fill="x", pady=(6, 0))
+
+            kw_btns = []
+
+            def _parse_topics(text: str) -> list:
+                items = [t.strip() for t in text.replace('\n', ';').split(';') if t.strip()]
+                return items
+
+            chip_drag = {
+                "item": None, "group_idx": None,
+                "target_item": None, "target_group": None,
+                "chip_map": {},
+                "sx": 0, "sy": 0,
+            }
+
+            def _chip_est_w(text):
+                cw = sum(14 if ord(c) > 127 else 8 for c in text)
+                return max(50, cw + 24)
+
+            def _chip_drag_start(event, item, g_idx):
+                chip_drag["item"] = item
+                chip_drag["group_idx"] = g_idx
+                chip_drag["target_item"] = None
+                chip_drag["target_group"] = None
+                chip_drag["sx"] = event.x_root
+                chip_drag["sy"] = event.y_root
+
+            def _chip_find_nearest(x_root, y_root):
+                best_item, best_group, best_dist = None, None, float("inf")
+                for name, (chip, gidx) in chip_drag["chip_map"].items():
+                    if name == chip_drag["item"]:
+                        continue
+                    try:
+                        cx = chip.winfo_rootx() + chip.winfo_width() // 2
+                        cy = chip.winfo_rooty() + chip.winfo_height() // 2
+                        dist = abs(cx - x_root) + abs(cy - y_root) * 1.5
+                        if dist < best_dist:
+                            best_dist, best_item, best_group = dist, name, gidx
+                    except Exception:
+                        pass
+                return best_item, best_group
+
+            def _chip_drag_motion(event):
+                target_item, target_group = _chip_find_nearest(event.x_root, event.y_root)
+                old_item = chip_drag["target_item"]
+                if target_item != old_item:
+                    if old_item and old_item in chip_drag["chip_map"]:
+                        chip_drag["chip_map"][old_item][0].configure(
+                            fg_color=C["accent"] if old_item == sel_kw[0] else C["accent_bg"])
+                    if target_item and target_item in chip_drag["chip_map"]:
+                        chip_drag["chip_map"][target_item][0].configure(fg_color="#E8923A")
+                    chip_drag["target_item"] = target_item
+                    chip_drag["target_group"] = target_group
+
+            def _chip_drag_end(event, src_item, src_gidx):
+                target_item = chip_drag["target_item"]
+                target_group = chip_drag["target_group"]
                 if target_item and target_item in chip_drag["chip_map"]:
-                    chip_drag["chip_map"][target_item][0].configure(fg_color="#E8923A")
-                chip_drag["target_item"] = target_item
-                chip_drag["target_group"] = target_group
+                    chip_drag["chip_map"][target_item][0].configure(
+                        fg_color=C["accent"] if target_item == sel_kw[0] else C["accent_bg"])
+                moved = (abs(event.x_root - chip_drag["sx"]) > 6 or
+                         abs(event.y_root - chip_drag["sy"]) > 6)
+                chip_drag["item"] = None
+                chip_drag["target_item"] = None
+                chip_drag["target_group"] = None
+                if moved and target_item and target_item != src_item:
+                    if target_group == src_gidx:
+                        row = working_rows[src_gidx]
+                        row.insert(row.index(target_item), row.pop(row.index(src_item)))
+                    elif target_group is not None and 0 <= target_group < len(working_rows):
+                        working_rows[src_gidx].remove(src_item)
+                        dst = working_rows[target_group]
+                        dst.insert(dst.index(target_item), src_item)
+                    dlg.after(1, _refresh_kw_list)
+                elif not moved:
+                    _select_kw(src_item, src_gidx)
 
-        def _chip_drag_end(event, src_item, src_gidx):
-            target_item = chip_drag["target_item"]
-            target_group = chip_drag["target_group"]
-            if target_item and target_item in chip_drag["chip_map"]:
-                chip_drag["chip_map"][target_item][0].configure(
-                    fg_color=C["accent"] if target_item == sel_kw[0] else C["accent_bg"])
-            moved = (abs(event.x_root - chip_drag["sx"]) > 6 or
-                     abs(event.y_root - chip_drag["sy"]) > 6)
-            chip_drag["item"] = None
-            chip_drag["target_item"] = None
-            chip_drag["target_group"] = None
-            if moved and target_item and target_item != src_item:
-                if target_group == src_gidx:
-                    row = working_rows[src_gidx]
-                    row.insert(row.index(target_item), row.pop(row.index(src_item)))
-                elif target_group is not None and 0 <= target_group < len(working_rows):
-                    working_rows[src_gidx].remove(src_item)
-                    dst = working_rows[target_group]
-                    dst.insert(dst.index(target_item), src_item)
-                dlg.after(1, _refresh_kw_list)
-            elif not moved:
-                _select_kw(src_item, src_gidx)
+            def _refresh_kw_list():
+                for b in kw_btns:
+                    b.destroy()
+                kw_btns.clear()
+                chip_drag["chip_map"].clear()
+                kw_scroll.update_idletasks()
 
-        def _refresh_kw_list():
-            for b in kw_btns:
-                b.destroy()
-            kw_btns.clear()
-            chip_drag["chip_map"].clear()
-            kw_scroll.update_idletasks()
+                for g_idx, row_names in enumerate(working_rows):
+                    # 그룹 컨테이너
+                    grp = ctk.CTkFrame(kw_scroll, fg_color=C["bg"], corner_radius=7,
+                                       border_width=1, border_color=C["border"])
+                    grp.pack(fill="x", pady=(0, 6), padx=2)
+                    kw_btns.append(grp)
 
-            for g_idx, row_names in enumerate(working_rows):
-                # 그룹 컨테이너
-                grp = ctk.CTkFrame(kw_scroll, fg_color=C["bg"], corner_radius=7,
-                                   border_width=1, border_color=C["border"])
-                grp.pack(fill="x", pady=(0, 6), padx=2)
-                kw_btns.append(grp)
+                    # 헤더: 행N (개수) | + 주제 | ↑ | ↓ | 행 삭제
+                    hdr = ctk.CTkFrame(grp, fg_color="transparent")
+                    hdr.pack(fill="x", padx=6, pady=(4, 2))
+                    _lbl(hdr, f"행 {g_idx+1}  ({len(row_names)}개)",
+                         font=F_SM, color=C["subtext"]).pack(side="left")
 
-                # 헤더: 행N (개수) | + 주제 | ↑ | ↓ | 행 삭제
-                hdr = ctk.CTkFrame(grp, fg_color="transparent")
-                hdr.pack(fill="x", padx=6, pady=(4, 2))
-                _lbl(hdr, f"행 {g_idx+1}  ({len(row_names)}개)",
-                     font=F_SM, color=C["subtext"]).pack(side="left")
+                    if g_idx < len(working_rows) - 1:
+                        def _mv_down(gi=g_idx):
+                            working_rows[gi], working_rows[gi + 1] = (
+                                working_rows[gi + 1], working_rows[gi])
+                            dlg.after(1, _refresh_kw_list)
+                        ctk.CTkButton(hdr, text="행↓", width=34, height=20, font=F_SM,
+                                      fg_color=C["accent_bg"], hover_color=C["accent_h"],
+                                      text_color=C["text"], corner_radius=4,
+                                      command=_mv_down).pack(side="right", padx=2)
+                    if g_idx > 0:
+                        def _mv_up(gi=g_idx):
+                            working_rows[gi], working_rows[gi - 1] = (
+                                working_rows[gi - 1], working_rows[gi])
+                            dlg.after(1, _refresh_kw_list)
+                        ctk.CTkButton(hdr, text="행↑", width=34, height=20, font=F_SM,
+                                      fg_color=C["accent_bg"], hover_color=C["accent_h"],
+                                      text_color=C["text"], corner_radius=4,
+                                      command=_mv_up).pack(side="right", padx=2)
 
-                if g_idx < len(working_rows) - 1:
-                    def _mv_down(gi=g_idx):
-                        working_rows[gi], working_rows[gi + 1] = (
-                            working_rows[gi + 1], working_rows[gi])
-                        dlg.after(1, _refresh_kw_list)
-                    ctk.CTkButton(hdr, text="행↓", width=34, height=20, font=F_SM,
-                                  fg_color=C["accent_bg"], hover_color=C["accent_h"],
-                                  text_color=C["text"], corner_radius=4,
-                                  command=_mv_down).pack(side="right", padx=2)
-                if g_idx > 0:
-                    def _mv_up(gi=g_idx):
-                        working_rows[gi], working_rows[gi - 1] = (
-                            working_rows[gi - 1], working_rows[gi])
-                        dlg.after(1, _refresh_kw_list)
-                    ctk.CTkButton(hdr, text="행↑", width=34, height=20, font=F_SM,
-                                  fg_color=C["accent_bg"], hover_color=C["accent_h"],
-                                  text_color=C["text"], corner_radius=4,
-                                  command=_mv_up).pack(side="right", padx=2)
+                    def _add_to_row(gi=g_idx):
+                        _add_kw(gi)
+                    ctk.CTkButton(hdr, text="+ 주제", width=54, height=20, font=F_SM,
+                                  fg_color=C["accent"], hover_color=C["accent_h"],
+                                  text_color="white", corner_radius=4,
+                                  command=_add_to_row).pack(side="right", padx=(0, 4))
 
-                def _add_to_row(gi=g_idx):
-                    _add_kw(gi)
-                ctk.CTkButton(hdr, text="+ 주제", width=54, height=20, font=F_SM,
-                              fg_color=C["accent"], hover_color=C["accent_h"],
-                              text_color="white", corner_radius=4,
-                              command=_add_to_row).pack(side="right", padx=(0, 4))
+                    # 칩 영역: 가용 너비에 따라 흐름 배치, 중앙 정렬
+                    chips_area = ctk.CTkFrame(grp, fg_color="transparent")
+                    chips_area.pack(fill="x", padx=4, pady=(0, 4))
 
-                # 칩 영역: 가용 너비에 따라 흐름 배치, 중앙 정렬
-                chips_area = ctk.CTkFrame(grp, fg_color="transparent")
-                chips_area.pack(fill="x", padx=4, pady=(0, 4))
-
-                # tl_left(440) - kw_scroll padx(8) - 스크롤바(14) - grp padx(4) - chips padx(8) - 여유(16)
-                avail = 390
-                has_nav = len(working_rows) > 1
-                nav_w = 22 if has_nav else 0
-                rows_items: list = []
-                cur_row: list = []
-                cur_w = 0
-                for _item in row_names:
-                    cw = _chip_est_w(_item) + nav_w + 6
-                    if cur_row and cur_w + cw > avail:
+                    # tl_left(440) - kw_scroll padx(8) - 스크롤바(14) - grp padx(4) - chips padx(8) - 여유(16)
+                    avail = 390
+                    has_nav = len(working_rows) > 1
+                    nav_w = 22 if has_nav else 0
+                    rows_items: list = []
+                    cur_row: list = []
+                    cur_w = 0
+                    for _item in row_names:
+                        cw = _chip_est_w(_item) + nav_w + 6
+                        if cur_row and cur_w + cw > avail:
+                            rows_items.append(cur_row)
+                            cur_row, cur_w = [], 0
+                        cur_row.append(_item)
+                        cur_w += cw
+                    if cur_row:
                         rows_items.append(cur_row)
-                        cur_row, cur_w = [], 0
-                    cur_row.append(_item)
-                    cur_w += cw
-                if cur_row:
-                    rows_items.append(cur_row)
 
-                for batch in rows_items:
-                    row_f = ctk.CTkFrame(chips_area, fg_color="transparent")
-                    row_f.pack(anchor="center", pady=1)
-                    for item in batch:
-                        is_sel = item == sel_kw[0]
-                        # 칩 + 이동 버튼 래퍼
-                        cw = ctk.CTkFrame(row_f, fg_color="transparent")
-                        cw.pack(side="left", padx=3, pady=2)
-                        chip = ctk.CTkLabel(
-                            cw, text=item,
-                            height=28, font=F_SM,
-                            fg_color=C["accent"] if is_sel else C["accent_bg"],
-                            text_color="white" if is_sel else C["text"],
-                            corner_radius=14, cursor="hand2",
-                        )
-                        chip.pack(side="left")
-                        # 개별 행 이동 버튼 (행이 2개 이상일 때만)
-                        if len(working_rows) > 1:
-                            nav = ctk.CTkFrame(cw, fg_color="transparent")
-                            nav.pack(side="left", padx=(1, 0))
-                            if g_idx > 0:
-                                def _chip_up(k=item, gi=g_idx):
-                                    working_rows[gi].remove(k)
-                                    working_rows[gi - 1].append(k)
-                                    dlg.after(1, _refresh_kw_list)
-                                ctk.CTkButton(nav, text="↑", width=18, height=13,
-                                              font=("Malgun Gothic", 8),
-                                              fg_color="transparent",
-                                              hover_color=C["border"],
-                                              text_color=C["subtext"],
-                                              corner_radius=2,
-                                              command=_chip_up).pack()
-                            if g_idx < len(working_rows) - 1:
-                                def _chip_dn(k=item, gi=g_idx):
-                                    working_rows[gi].remove(k)
-                                    working_rows[gi + 1].append(k)
-                                    dlg.after(1, _refresh_kw_list)
-                                ctk.CTkButton(nav, text="↓", width=18, height=13,
-                                              font=("Malgun Gothic", 8),
-                                              fg_color="transparent",
-                                              hover_color=C["border"],
-                                              text_color=C["subtext"],
-                                              corner_radius=2,
-                                              command=_chip_dn).pack()
-                        chip_drag["chip_map"][item] = (chip, g_idx)
-                        chip.bind("<ButtonPress-1>",  lambda e, k=item, gi=g_idx: _chip_drag_start(e, k, gi))
-                        chip.bind("<B1-Motion>",       lambda e: _chip_drag_motion(e))
-                        chip.bind("<ButtonRelease-1>", lambda e, k=item, gi=g_idx: _chip_drag_end(e, k, gi))
-                        chip.bind("<Double-Button-1>", lambda e, k=item: _rename_kw(k))
+                    for batch in rows_items:
+                        row_f = ctk.CTkFrame(chips_area, fg_color="transparent")
+                        row_f.pack(anchor="center", pady=1)
+                        for item in batch:
+                            is_sel = item == sel_kw[0]
+                            # 칩 + 이동 버튼 래퍼
+                            cw = ctk.CTkFrame(row_f, fg_color="transparent")
+                            cw.pack(side="left", padx=3, pady=2)
+                            chip = ctk.CTkLabel(
+                                cw, text=item,
+                                height=28, font=F_SM,
+                                fg_color=C["accent"] if is_sel else C["accent_bg"],
+                                text_color="white" if is_sel else C["text"],
+                                corner_radius=14, cursor="hand2",
+                            )
+                            chip.pack(side="left")
+                            # 개별 행 이동 버튼 (행이 2개 이상일 때만)
+                            if len(working_rows) > 1:
+                                nav = ctk.CTkFrame(cw, fg_color="transparent")
+                                nav.pack(side="left", padx=(1, 0))
+                                if g_idx > 0:
+                                    def _chip_up(k=item, gi=g_idx):
+                                        working_rows[gi].remove(k)
+                                        working_rows[gi - 1].append(k)
+                                        dlg.after(1, _refresh_kw_list)
+                                    ctk.CTkButton(nav, text="↑", width=18, height=13,
+                                                  font=("Malgun Gothic", 8),
+                                                  fg_color="transparent",
+                                                  hover_color=C["border"],
+                                                  text_color=C["subtext"],
+                                                  corner_radius=2,
+                                                  command=_chip_up).pack()
+                                if g_idx < len(working_rows) - 1:
+                                    def _chip_dn(k=item, gi=g_idx):
+                                        working_rows[gi].remove(k)
+                                        working_rows[gi + 1].append(k)
+                                        dlg.after(1, _refresh_kw_list)
+                                    ctk.CTkButton(nav, text="↓", width=18, height=13,
+                                                  font=("Malgun Gothic", 8),
+                                                  fg_color="transparent",
+                                                  hover_color=C["border"],
+                                                  text_color=C["subtext"],
+                                                  corner_radius=2,
+                                                  command=_chip_dn).pack()
+                            chip_drag["chip_map"][item] = (chip, g_idx)
+                            chip.bind("<ButtonPress-1>",  lambda e, k=item, gi=g_idx: _chip_drag_start(e, k, gi))
+                            chip.bind("<B1-Motion>",       lambda e: _chip_drag_motion(e))
+                            chip.bind("<ButtonRelease-1>", lambda e, k=item, gi=g_idx: _chip_drag_end(e, k, gi))
+                            chip.bind("<Double-Button-1>", lambda e, k=item: _rename_kw(k))
 
-        def _select_kw(kw_item: str, g_idx: int = None):
-            if sel_kw[0] and sel_kw[0] in working_topics:
-                topics_text = tl_txt.get("1.0", "end").strip()
-                working_topics[sel_kw[0]] = _parse_topics(topics_text)
-            old_sel = sel_kw[0]
-            sel_kw[0] = kw_item
-            sel_kw_row[0] = g_idx
-            sel_kw_lbl.configure(text=kw_item)
-            tl_txt.delete("1.0", "end")
-            topics = working_topics.get(kw_item, [])
-            topic_count_lbl.configure(text=f"({len(topics)}개)")
-            tl_txt.insert("1.0", ";".join(topics))
-            if old_sel and old_sel in chip_drag["chip_map"]:
-                try:
-                    chip_drag["chip_map"][old_sel][0].configure(
-                        fg_color=C["accent_bg"], text_color=C["text"])
-                except Exception:
-                    pass
-            if kw_item in chip_drag["chip_map"]:
-                try:
-                    chip_drag["chip_map"][kw_item][0].configure(
-                        fg_color=C["accent"], text_color="white")
-                except Exception:
-                    pass
-
-        def _add_kw(target_group=None):
-            add_dlg = ctk.CTkToplevel(dlg)
-            add_dlg.title("주제 추가")
-            add_dlg.geometry("260x100")
-            add_dlg.resizable(False, False)
-            add_dlg.grab_set(); add_dlg.lift()
-            sw2, sh2 = dlg.winfo_screenwidth(), dlg.winfo_screenheight()
-            add_dlg.geometry(f"260x100+{(sw2-260)//2}+{(sh2-100)//2}")
-            _lbl(add_dlg, "주제명", font=F_SM, color=C["subtext"]).pack(pady=(10, 4))
-            e = ctk.CTkEntry(add_dlg, width=200, height=30, font=F,
-                             fg_color=C["input_bg"], border_color=C["border"],
-                             text_color=C["text"], corner_radius=7)
-            e.pack(); e.focus()
-            def _confirm(event=None):
-                kw_new = e.get().strip()
-                if kw_new and kw_new not in working_topics:
-                    working_topics[kw_new] = []
-                    gi = target_group if target_group is not None else (
-                        sel_kw_row[0] if sel_kw_row[0] is not None else len(working_rows) - 1)
-                    gi = max(0, min(gi, len(working_rows) - 1))
-                    working_rows[gi].append(kw_new)
-                    _refresh_kw_list()
-                    _select_kw(kw_new, gi)
-                add_dlg.destroy()
-            e.bind("<Return>", _confirm)
-            _btn(add_dlg, "추가", _confirm, w=80, h=28).pack(pady=(6, 0))
-
-        def _rename_kw(kw_item: str):
-            ren_dlg = ctk.CTkToplevel(dlg)
-            ren_dlg.title("주제명 수정")
-            ren_dlg.geometry("260x100")
-            ren_dlg.resizable(False, False)
-            ren_dlg.grab_set(); ren_dlg.lift()
-            sw2, sh2 = dlg.winfo_screenwidth(), dlg.winfo_screenheight()
-            ren_dlg.geometry(f"260x100+{(sw2-260)//2}+{(sh2-100)//2}")
-            _lbl(ren_dlg, "주제명", font=F_SM, color=C["subtext"]).pack(pady=(10, 4))
-            e = ctk.CTkEntry(ren_dlg, width=200, height=30, font=F,
-                             fg_color=C["input_bg"], border_color=C["border"],
-                             text_color=C["text"], corner_radius=7)
-            e.pack(); e.insert(0, kw_item); e.focus()
-            def _confirm(event=None):
-                new_name = e.get().strip()
-                if new_name and new_name != kw_item and new_name not in working_topics:
-                    new_dict = {}
-                    for k, v in working_topics.items():
-                        new_dict[new_name if k == kw_item else k] = v
-                    working_topics.clear()
-                    working_topics.update(new_dict)
-                    for row in working_rows:
-                        if kw_item in row:
-                            row[row.index(kw_item)] = new_name
-                    if sel_kw[0] == kw_item:
-                        sel_kw[0] = new_name
-                        sel_kw_lbl.configure(text=new_name)
-                    _refresh_kw_list()
-                ren_dlg.destroy()
-            e.bind("<Return>", _confirm)
-            _btn(ren_dlg, "저장", _confirm, w=80, h=28).pack(pady=(6, 0))
-
-        def _del_kw():
-            if sel_kw[0] and sel_kw[0] in working_topics:
-                item = sel_kw[0]
-                del working_topics[item]
-                for row in working_rows:
-                    if item in row:
-                        row.remove(item)
-                sel_kw[0] = None
-                sel_kw_row[0] = None
-                sel_kw_lbl.configure(text="키워드를 선택하세요")
-                topic_count_lbl.configure(text="")
+            def _select_kw(kw_item: str, g_idx: int = None):
+                if sel_kw[0] and sel_kw[0] in working_topics:
+                    topics_text = tl_txt.get("1.0", "end").strip()
+                    working_topics[sel_kw[0]] = _parse_topics(topics_text)
+                old_sel = sel_kw[0]
+                sel_kw[0] = kw_item
+                sel_kw_row[0] = g_idx
+                sel_kw_lbl.configure(text=kw_item)
                 tl_txt.delete("1.0", "end")
-                _refresh_kw_list()
+                topics = working_topics.get(kw_item, [])
+                topic_count_lbl.configure(text=f"({len(topics)}개)")
+                tl_txt.insert("1.0", ";".join(topics))
+                if old_sel and old_sel in chip_drag["chip_map"]:
+                    try:
+                        chip_drag["chip_map"][old_sel][0].configure(
+                            fg_color=C["accent_bg"], text_color=C["text"])
+                    except Exception:
+                        pass
+                if kw_item in chip_drag["chip_map"]:
+                    try:
+                        chip_drag["chip_map"][kw_item][0].configure(
+                            fg_color=C["accent"], text_color="white")
+                    except Exception:
+                        pass
 
-        def _save_topics():
-            if sel_kw[0] and sel_kw[0] in working_topics:
-                topics_text = tl_txt.get("1.0", "end").strip()
-                working_topics[sel_kw[0]] = _parse_topics(topics_text)
-                topic_count_lbl.configure(text=f"({len(working_topics[sel_kw[0]])}개)")
-                _refresh_kw_list()
-            self._topic_lists = {k: list(v) for k, v in working_topics.items()}
-            self._topic_rows = [list(r) for r in working_rows]
-            self._save_prefs()
-            self._update_topic_state()
-            save_notify.configure(text="✅ 저장됨")
-            dlg.after(2000, lambda: save_notify.configure(text=""))
-
-        _btn(tl_btn_row, "+ 주제 추가", _add_kw, w=100, h=30).pack(side="left")
-        _btn(tl_btn_row, "🗑 삭제", _del_kw, w=80, h=30,
-             color=C["err"], hover="#A03030").pack(side="left", padx=(6, 0))
-
-        _refresh_kw_list()
-        if working_topics:
-            first_item = next(
-                (k for r in working_rows for k in r if k in working_topics), None)
-            if first_item:
-                gi = next((i for i, r in enumerate(working_rows) if first_item in r), 0)
-                _select_kw(first_item, gi)
-
-        # ── 탭5 내용: 인기글 수집 ────────────────────────
-        import threading as _threading
-        import naver_collector as _nc
-
-        c5_opt_count_var      = tk.StringVar(value=str(self._collect_count))
-        c5_opt_skip_var       = tk.StringVar(value=str(self._collect_skip))
-        c5_opt_chunk_var      = tk.StringVar(value=self._collect_chunk)
-        c5_opt_maxch_var      = tk.StringVar(value=str(self._collect_maxchars))
-        c5_opt_header_var     = tk.StringVar(value=self._collect_header)
-        c5_opt_delimiters_var = tk.StringVar(value=self._collect_delimiters)
-        c5_opt_ending_var     = tk.StringVar(value=self._collect_ending)
-        c5_opt_bottom_var     = tk.StringVar(value=self._collect_bottom)
-
-        def _c5_save_opts():
-            try: self._collect_count    = int(c5_opt_count_var.get())
-            except Exception: pass
-            try: self._collect_skip     = int(c5_opt_skip_var.get())
-            except Exception: pass
-            self._collect_chunk         = c5_opt_chunk_var.get().strip() or "0"
-            try: self._collect_maxchars = int(c5_opt_maxch_var.get())
-            except Exception: pass
-            self._collect_header        = c5_opt_header_var.get().strip() or "[인기글 참조]"
-            c5_opt_header_var.set(self._collect_header)
-            self._collect_delimiters    = c5_opt_delimiters_var.get().strip()
-            self._collect_ending        = c5_opt_ending_var.get().strip()
-            self._collect_bottom        = c5_opt_bottom_var.get().strip()
-            self._save_prefs()
-            save_notify.configure(text="✅ 저장됨")
-            dlg.after(2000, lambda: save_notify.configure(text=""))
-
-        # ── 옵션 영역 (side="bottom") ─────────────────────
-        c5_opt_frame = ctk.CTkFrame(tab5_content, fg_color=C["input_bg"],
-                                    corner_radius=8, border_width=0)
-        c5_opt_frame.pack(side="bottom", fill="x", pady=(8, 4))
-
-        def _opt_entry(parent, var, w=60):
-            ctk.CTkEntry(parent, textvariable=var, width=w, height=28, font=F_SM,
-                         fg_color=C["bg"], border_color=C["border"],
-                         text_color=C["text"], corner_radius=6, justify="center",
-            ).pack(side="left", padx=(0, 6))
-
-        def _div(parent):
-            ctk.CTkFrame(parent, fg_color=C["border"], width=1, height=20).pack(side="left", padx=14)
-
-        # 구분 기준 버튼 행
-        def _open_delimiters_dlg():
-            d = ctk.CTkToplevel(dlg)
-            d.title("구분 기준 설정")
-            d.geometry("440x150")
-            d.resizable(False, False)
-            d.grab_set(); d.lift()
-            sw2, sh2 = d.winfo_screenwidth(), d.winfo_screenheight()
-            d.geometry(f"440x150+{(sw2-440)//2}+{(sh2-150)//2}")
-            _lbl(d, "구분 단어 ( ; 로 구분, 예: 어요;에요;예요;니다 )",
-                 font=F_SM, color=C["subtext"]).pack(pady=(14, 6), padx=16, anchor="w")
-            entry = ctk.CTkEntry(d, width=410, height=32, font=F,
+            def _add_kw(target_group=None):
+                add_dlg = ctk.CTkToplevel(dlg)
+                add_dlg.title("주제 추가")
+                add_dlg.geometry("260x100")
+                add_dlg.resizable(False, False)
+                add_dlg.grab_set(); add_dlg.lift()
+                sw2, sh2 = dlg.winfo_screenwidth(), dlg.winfo_screenheight()
+                add_dlg.geometry(f"260x100+{(sw2-260)//2}+{(sh2-100)//2}")
+                _lbl(add_dlg, "주제명", font=F_SM, color=C["subtext"]).pack(pady=(10, 4))
+                e = _UndoEntry(add_dlg, width=200, height=30, font=F,
                                  fg_color=C["input_bg"], border_color=C["border"],
                                  text_color=C["text"], corner_radius=7)
-            entry.pack(padx=16)
-            entry.insert(0, c5_opt_delimiters_var.get())
-            def _ok():
-                c5_opt_delimiters_var.set(entry.get().strip())
-                d.destroy()
-            br = ctk.CTkFrame(d, fg_color="transparent")
-            br.pack(pady=8)
-            _btn(br, "확인", _ok, w=80, h=30, small=True).pack(side="left", padx=4)
-            _btn(br, "취소", d.destroy, w=80, h=30, small=True,
-                 color=C["subtext"]).pack(side="left", padx=4)
+                e.pack(); e.focus()
+                def _confirm(event=None):
+                    kw_new = e.get().strip()
+                    if kw_new and kw_new not in working_topics:
+                        working_topics[kw_new] = []
+                        gi = target_group if target_group is not None else (
+                            sel_kw_row[0] if sel_kw_row[0] is not None else len(working_rows) - 1)
+                        gi = max(0, min(gi, len(working_rows) - 1))
+                        working_rows[gi].append(kw_new)
+                        _refresh_kw_list()
+                        _select_kw(kw_new, gi)
+                    add_dlg.destroy()
+                e.bind("<Return>", _confirm)
+                _btn(add_dlg, "추가", _confirm, w=80, h=28).pack(pady=(6, 0))
 
-        opt_row0 = ctk.CTkFrame(c5_opt_frame, fg_color="transparent")
-        opt_row0.pack(fill="x", padx=14, pady=(10, 4))
-        _btn(opt_row0, "구분 기준", _open_delimiters_dlg, w=90, h=28, small=True).pack(side="left", padx=(0, 8))
-        _lbl(opt_row0, "미설정 시 . ! ? 기준 / 설정 시 해당 단어 기준",
-             font=F_SM, color=C["subtext"]).pack(side="left")
+            def _rename_kw(kw_item: str):
+                ren_dlg = ctk.CTkToplevel(dlg)
+                ren_dlg.title("주제명 수정")
+                ren_dlg.geometry("260x100")
+                ren_dlg.resizable(False, False)
+                ren_dlg.grab_set(); ren_dlg.lift()
+                sw2, sh2 = dlg.winfo_screenwidth(), dlg.winfo_screenheight()
+                ren_dlg.geometry(f"260x100+{(sw2-260)//2}+{(sh2-100)//2}")
+                _lbl(ren_dlg, "주제명", font=F_SM, color=C["subtext"]).pack(pady=(10, 4))
+                e = _UndoEntry(ren_dlg, width=200, height=30, font=F,
+                                 fg_color=C["input_bg"], border_color=C["border"],
+                                 text_color=C["text"], corner_radius=7)
+                e.pack(); e.insert(0, kw_item); e.focus()
+                def _confirm(event=None):
+                    new_name = e.get().strip()
+                    if new_name and new_name != kw_item and new_name not in working_topics:
+                        new_dict = {}
+                        for k, v in working_topics.items():
+                            new_dict[new_name if k == kw_item else k] = v
+                        working_topics.clear()
+                        working_topics.update(new_dict)
+                        for row in working_rows:
+                            if kw_item in row:
+                                row[row.index(kw_item)] = new_name
+                        if sel_kw[0] == kw_item:
+                            sel_kw[0] = new_name
+                            sel_kw_lbl.configure(text=new_name)
+                        _refresh_kw_list()
+                    ren_dlg.destroy()
+                e.bind("<Return>", _confirm)
+                _btn(ren_dlg, "저장", _confirm, w=80, h=28).pack(pady=(6, 0))
 
-        # 1행: 1.포스팅 수집수 | 2.앞뒤 문단 빼기 | 3.단락 구분
-        opt_row1 = ctk.CTkFrame(c5_opt_frame, fg_color="transparent")
-        opt_row1.pack(fill="x", padx=14, pady=(10, 6))
-        _lbl(opt_row1, "1. 수집수", font=F_SM, color=C["subtext"]).pack(side="left", padx=(0, 6))
-        _opt_entry(opt_row1, c5_opt_count_var, w=52)
-        _lbl(opt_row1, "개", font=F_SM, color=C["subtext"]).pack(side="left")
-        _div(opt_row1)
-        _lbl(opt_row1, "2. 앞뒤 문단 빼기", font=F_SM, color=C["subtext"]).pack(side="left", padx=(0, 6))
-        _opt_entry(opt_row1, c5_opt_skip_var, w=52)
-        _lbl(opt_row1, "개 ( 0=끄기 )", font=F_SM, color=C["subtext"]).pack(side="left")
-        _div(opt_row1)
-        _lbl(opt_row1, "3. 단락 구분", font=F_SM, color=C["subtext"]).pack(side="left", padx=(0, 6))
-        _opt_entry(opt_row1, c5_opt_chunk_var, w=68)
-        _lbl(opt_row1, "( 예: 2~4 / 0=끄기 )", font=F_SM, color=C["subtext"]).pack(side="left")
+            def _del_kw():
+                if sel_kw[0] and sel_kw[0] in working_topics:
+                    item = sel_kw[0]
+                    del working_topics[item]
+                    for row in working_rows:
+                        if item in row:
+                            row.remove(item)
+                    sel_kw[0] = None
+                    sel_kw_row[0] = None
+                    sel_kw_lbl.configure(text="키워드를 선택하세요")
+                    topic_count_lbl.configure(text="")
+                    tl_txt.delete("1.0", "end")
+                    _refresh_kw_list()
 
-        # 2행: 4.글자수 제한 | 5.참조 헤더 | 6.참조 바텀
-        opt_row2 = ctk.CTkFrame(c5_opt_frame, fg_color="transparent")
-        opt_row2.pack(fill="x", padx=14, pady=(0, 4))
-        _lbl(opt_row2, "4. 글자수 제한", font=F_SM, color=C["subtext"]).pack(side="left", padx=(0, 6))
-        _opt_entry(opt_row2, c5_opt_maxch_var, w=72)
-        _lbl(opt_row2, "자 ( 0=끄기 )", font=F_SM, color=C["subtext"]).pack(side="left")
-        _div(opt_row2)
-        _lbl(opt_row2, "5. 참조 헤더", font=F_SM, color=C["subtext"]).pack(side="left", padx=(0, 6))
-        _opt_entry(opt_row2, c5_opt_header_var, w=120)
-        _div(opt_row2)
-        _lbl(opt_row2, "6. 참조 바텀", font=F_SM, color=C["subtext"]).pack(side="left", padx=(0, 6))
-        _opt_entry(opt_row2, c5_opt_bottom_var, w=160)
+            def _save_topics():
+                if sel_kw[0] and sel_kw[0] in working_topics:
+                    topics_text = tl_txt.get("1.0", "end").strip()
+                    working_topics[sel_kw[0]] = _parse_topics(topics_text)
+                    topic_count_lbl.configure(text=f"({len(working_topics[sel_kw[0]])}개)")
+                    _refresh_kw_list()
+                self._topic_lists = {k: list(v) for k, v in working_topics.items()}
+                self._topic_rows = [list(r) for r in working_rows]
+                self._save_prefs()
+                self._update_topic_state()
+                save_notify.configure(text="✅ 저장됨")
+                dlg.after(2000, lambda: save_notify.configure(text=""))
 
-        # 3행: 7.맨끝 문구
-        opt_row4 = ctk.CTkFrame(c5_opt_frame, fg_color="transparent")
-        opt_row4.pack(fill="x", padx=14, pady=(0, 12))
-        _lbl(opt_row4, "7. 맨끝 문구(업체 입력시)", font=F_SM, color=C["subtext"]).pack(side="left", padx=(0, 6))
-        _opt_entry(opt_row4, c5_opt_ending_var, w=300)
+            _btn(tl_btn_row, "+ 주제 추가", _add_kw, w=100, h=30).pack(side="left")
+            _btn(tl_btn_row, "🗑 삭제", _del_kw, w=80, h=30,
+                 color=C["err"], hover="#A03030").pack(side="left", padx=(6, 0))
 
-        # ── 테스트 영역 (상단) ────────────────────────────
-        c5_top = ctk.CTkFrame(tab5_content, fg_color="transparent")
-        c5_top.pack(fill="x", pady=(0, 6))
-        _lbl(c5_top, "키워드", font=F_SMB, color=C["subtext"]).pack(side="left", padx=(0, 8))
-        c5_kw_entry = ctk.CTkEntry(
-            c5_top, height=32, font=F,
-            fg_color=C["input_bg"], border_color=C["border"],
-            text_color=C["text"], corner_radius=7,
-        )
-        c5_kw_entry.pack(side="left", fill="x", expand=True, padx=(0, 8))
-        c5_status = _lbl(c5_top, "", font=F_SM, color=C["subtext"])
-        c5_status.pack(side="left", padx=(0, 8))
+            _refresh_kw_list()
+            if working_topics:
+                first_item = next(
+                    (k for r in working_rows for k in r if k in working_topics), None)
+                if first_item:
+                    gi = next((i for i, r in enumerate(working_rows) if first_item in r), 0)
+                    _select_kw(first_item, gi)
 
-        c5_result = ctk.CTkTextbox(
-            tab5_content, font=F_SM,
-            fg_color=C["input_bg"], border_color=C["border"],
-            text_color=C["text"], corner_radius=8, border_width=1,
-            wrap="word", state="disabled",
-        )
-        c5_result.pack(fill="both", expand=True)
+            _t4_save[0] = _save_topics
 
-        def _c5_collect():
-            kw = c5_kw_entry.get().strip()
-            if not kw:
-                c5_status.configure(text="키워드를 입력하세요.", text_color=C["err"])
-                return
-            try:
-                cnt  = int(c5_opt_count_var.get())
-                skip = int(c5_opt_skip_var.get())
-            except ValueError:
-                cnt, skip = 5, 0
-            c5_status.configure(text="🔄 수집 중...", text_color=C["accent"])
-            c5_result.configure(state="normal")
-            c5_result.delete("1.0", "end")
-            c5_result.insert("1.0", "수집 중...\n")
-            c5_result.configure(state="disabled")
-            c5_collect_btn.configure(state="disabled")
+        def _build_tab5():
+            # ── 탭5 내용: 인기글 수집 ────────────────────────
+            import threading as _threading
+            import naver_collector as _nc
 
-            def _run():
+            c5_opt_count_var      = tk.StringVar(value=str(self._collect_count))
+            c5_opt_skip_var       = tk.StringVar(value=str(self._collect_skip))
+            c5_opt_chunk_var      = tk.StringVar(value=self._collect_chunk)
+            c5_opt_maxch_var      = tk.StringVar(value=str(self._collect_maxchars))
+            c5_opt_header_var     = tk.StringVar(value=self._collect_header)
+            c5_opt_delimiters_var = tk.StringVar(value=self._collect_delimiters)
+            c5_opt_ending_var     = tk.StringVar(value=self._collect_ending)
+            c5_opt_bottom_var     = tk.StringVar(value=self._collect_bottom)
+
+            def _c5_save_opts():
+                try: self._collect_count    = int(c5_opt_count_var.get())
+                except Exception: pass
+                try: self._collect_skip     = int(c5_opt_skip_var.get())
+                except Exception: pass
+                self._collect_chunk         = c5_opt_chunk_var.get().strip() or "0"
+                try: self._collect_maxchars = int(c5_opt_maxch_var.get())
+                except Exception: pass
+                self._collect_header        = c5_opt_header_var.get().strip() or "[인기글 참조]"
+                c5_opt_header_var.set(self._collect_header)
+                self._collect_delimiters    = c5_opt_delimiters_var.get().strip()
+                self._collect_ending        = c5_opt_ending_var.get().strip()
+                self._collect_bottom        = c5_opt_bottom_var.get().strip()
+                self._save_prefs()
+                save_notify.configure(text="✅ 저장됨")
+                dlg.after(2000, lambda: save_notify.configure(text=""))
+
+            # ── 옵션 영역 (side="bottom") ─────────────────────
+            c5_opt_frame = ctk.CTkFrame(tab5_content, fg_color=C["input_bg"],
+                                        corner_radius=8, border_width=0)
+            c5_opt_frame.pack(side="bottom", fill="x", pady=(8, 4))
+
+            def _opt_entry(parent, var, w=60):
+                _UndoEntry(parent, textvariable=var, width=w, height=28, font=F_SM,
+                             fg_color=C["bg"], border_color=C["border"],
+                             text_color=C["text"], corner_radius=6, justify="center",
+                ).pack(side="left", padx=(0, 6))
+
+            def _div(parent):
+                ctk.CTkFrame(parent, fg_color=C["border"], width=1, height=20).pack(side="left", padx=14)
+
+            # 구분 기준 버튼 행
+            def _open_delimiters_dlg():
+                d = ctk.CTkToplevel(dlg)
+                d.title("구분 기준 설정")
+                d.geometry("440x150")
+                d.resizable(False, False)
+                d.grab_set(); d.lift()
+                sw2, sh2 = d.winfo_screenwidth(), d.winfo_screenheight()
+                d.geometry(f"440x150+{(sw2-440)//2}+{(sh2-150)//2}")
+                _lbl(d, "구분 단어 ( ; 로 구분, 예: 어요;에요;예요;니다 )",
+                     font=F_SM, color=C["subtext"]).pack(pady=(14, 6), padx=16, anchor="w")
+                entry = _UndoEntry(d, width=410, height=32, font=F,
+                                     fg_color=C["input_bg"], border_color=C["border"],
+                                     text_color=C["text"], corner_radius=7)
+                entry.pack(padx=16)
+                entry.insert(0, c5_opt_delimiters_var.get())
+                def _ok():
+                    c5_opt_delimiters_var.set(entry.get().strip())
+                    d.destroy()
+                br = ctk.CTkFrame(d, fg_color="transparent")
+                br.pack(pady=8)
+                _btn(br, "확인", _ok, w=80, h=30, small=True).pack(side="left", padx=4)
+                _btn(br, "취소", d.destroy, w=80, h=30, small=True,
+                     color=C["subtext"]).pack(side="left", padx=4)
+
+            opt_row0 = ctk.CTkFrame(c5_opt_frame, fg_color="transparent")
+            opt_row0.pack(fill="x", padx=14, pady=(10, 4))
+            _btn(opt_row0, "구분 기준", _open_delimiters_dlg, w=90, h=28, small=True).pack(side="left", padx=(0, 8))
+            _lbl(opt_row0, "미설정 시 . ! ? 기준 / 설정 시 해당 단어 기준",
+                 font=F_SM, color=C["subtext"]).pack(side="left")
+
+            # 1행: 1.포스팅 수집수 | 2.앞뒤 문단 빼기 | 3.단락 구분
+            opt_row1 = ctk.CTkFrame(c5_opt_frame, fg_color="transparent")
+            opt_row1.pack(fill="x", padx=14, pady=(10, 6))
+            _lbl(opt_row1, "1. 수집수", font=F_SM, color=C["subtext"]).pack(side="left", padx=(0, 6))
+            _opt_entry(opt_row1, c5_opt_count_var, w=52)
+            _lbl(opt_row1, "개", font=F_SM, color=C["subtext"]).pack(side="left")
+            _div(opt_row1)
+            _lbl(opt_row1, "2. 앞뒤 문단 빼기", font=F_SM, color=C["subtext"]).pack(side="left", padx=(0, 6))
+            _opt_entry(opt_row1, c5_opt_skip_var, w=52)
+            _lbl(opt_row1, "개 ( 0=끄기 )", font=F_SM, color=C["subtext"]).pack(side="left")
+            _div(opt_row1)
+            _lbl(opt_row1, "3. 단락 구분", font=F_SM, color=C["subtext"]).pack(side="left", padx=(0, 6))
+            _opt_entry(opt_row1, c5_opt_chunk_var, w=68)
+            _lbl(opt_row1, "( 예: 2~4 / 0=끄기 )", font=F_SM, color=C["subtext"]).pack(side="left")
+
+            # 2행: 4.글자수 제한 | 5.참조 헤더 | 6.참조 바텀
+            opt_row2 = ctk.CTkFrame(c5_opt_frame, fg_color="transparent")
+            opt_row2.pack(fill="x", padx=14, pady=(0, 4))
+            _lbl(opt_row2, "4. 글자수 제한", font=F_SM, color=C["subtext"]).pack(side="left", padx=(0, 6))
+            _opt_entry(opt_row2, c5_opt_maxch_var, w=72)
+            _lbl(opt_row2, "자 ( 0=끄기 )", font=F_SM, color=C["subtext"]).pack(side="left")
+            _div(opt_row2)
+            _lbl(opt_row2, "5. 참조 헤더", font=F_SM, color=C["subtext"]).pack(side="left", padx=(0, 6))
+            _opt_entry(opt_row2, c5_opt_header_var, w=120)
+            _div(opt_row2)
+            _lbl(opt_row2, "6. 참조 바텀", font=F_SM, color=C["subtext"]).pack(side="left", padx=(0, 6))
+            _opt_entry(opt_row2, c5_opt_bottom_var, w=160)
+
+            # 3행: 7.맨끝 문구
+            opt_row4 = ctk.CTkFrame(c5_opt_frame, fg_color="transparent")
+            opt_row4.pack(fill="x", padx=14, pady=(0, 12))
+            _lbl(opt_row4, "7. 맨끝 문구(업체 입력시)", font=F_SM, color=C["subtext"]).pack(side="left", padx=(0, 6))
+            _opt_entry(opt_row4, c5_opt_ending_var, w=300)
+
+            # ── 테스트 영역 (상단) ────────────────────────────
+            c5_top = ctk.CTkFrame(tab5_content, fg_color="transparent")
+            c5_top.pack(fill="x", pady=(0, 6))
+            _lbl(c5_top, "키워드", font=F_SMB, color=C["subtext"]).pack(side="left", padx=(0, 8))
+            c5_kw_entry = _UndoEntry(
+                c5_top, height=32, font=F,
+                fg_color=C["input_bg"], border_color=C["border"],
+                text_color=C["text"], corner_radius=7,
+            )
+            c5_kw_entry.pack(side="left", fill="x", expand=True, padx=(0, 8))
+            c5_status = _lbl(c5_top, "", font=F_SM, color=C["subtext"])
+            c5_status.pack(side="left", padx=(0, 8))
+
+            c5_result = tk.Text(
+                tab5_content, font=F_SM,
+                bg=C["input_bg"], fg=C["text"],
+                insertbackground=C["text"],
+                relief="flat", bd=0, padx=6, pady=4, wrap="word",
+                highlightthickness=1, highlightbackground=C["border"],
+                state="disabled",
+            )
+            c5_result.pack(fill="both", expand=True)
+
+            def _c5_collect():
+                kw = c5_kw_entry.get().strip()
+                if not kw:
+                    c5_status.configure(text="키워드를 입력하세요.", text_color=C["err"])
+                    return
                 try:
-                    def _prog(done, total):
-                        dlg.after(0, lambda d=done, t=total:
-                            c5_status.configure(text=f"🔄 {d}/{t} 수집 중...", text_color=C["accent"]))
-                    chunk = c5_opt_chunk_var.get().strip() or "0"
-                    try: maxch = int(c5_opt_maxch_var.get())
-                    except Exception: maxch = 0
-                    dlims = [x.strip() for x in c5_opt_delimiters_var.get().split(';') if x.strip()] or None
-                    results = _nc.collect(kw, cnt, skip=skip, chunk_range=chunk,
-                                          maxchars=maxch, delimiters=dlims, progress_cb=_prog)
-                    lines = [c5_opt_header_var.get().strip() or "[인기글 참조]"]
-                    for _title, text, _url in results:
-                        lines.append(f"\n{text}")
-                    if bottom := c5_opt_bottom_var.get().strip():
-                        lines.append(f"\n{bottom}")
-                    output = "\n".join(lines) if results else "결과 없음"
+                    cnt  = int(c5_opt_count_var.get())
+                    skip = int(c5_opt_skip_var.get())
+                except ValueError:
+                    cnt, skip = 5, 0
+                c5_status.configure(text="🔄 수집 중...", text_color=C["accent"])
+                c5_result.configure(state="normal")
+                c5_result.delete("1.0", "end")
+                c5_result.insert("1.0", "수집 중...\n")
+                c5_result.configure(state="disabled")
+                c5_collect_btn.configure(state="disabled")
 
-                    def _done():
-                        c5_result.configure(state="normal")
-                        c5_result.delete("1.0", "end")
-                        c5_result.insert("1.0", output)
-                        c5_result.configure(state="disabled")
-                        c5_status.configure(text=f"✅ {len(results)}개 수집 완료", text_color=C["ok"])
-                        c5_collect_btn.configure(state="normal")
-                    dlg.after(0, _done)
-                except Exception as e:
-                    def _err(msg=str(e)):
-                        c5_result.configure(state="normal")
-                        c5_result.delete("1.0", "end")
-                        c5_result.insert("1.0", f"오류: {msg}")
-                        c5_result.configure(state="disabled")
-                        c5_status.configure(text="❌ 오류", text_color=C["err"])
-                        c5_collect_btn.configure(state="normal")
-                    dlg.after(0, _err)
+                def _run():
+                    try:
+                        def _prog(done, total):
+                            dlg.after(0, lambda d=done, t=total:
+                                c5_status.configure(text=f"🔄 {d}/{t} 수집 중...", text_color=C["accent"]))
+                        chunk = c5_opt_chunk_var.get().strip() or "0"
+                        try: maxch = int(c5_opt_maxch_var.get())
+                        except Exception: maxch = 0
+                        dlims = [x.strip() for x in c5_opt_delimiters_var.get().split(';') if x.strip()] or None
+                        results = _nc.collect(kw, cnt, skip=skip, chunk_range=chunk,
+                                              maxchars=maxch, delimiters=dlims, progress_cb=_prog)
+                        lines = [c5_opt_header_var.get().strip() or "[인기글 참조]"]
+                        for _title, text, _url in results:
+                            lines.append(f"\n{text}")
+                        if bottom := c5_opt_bottom_var.get().strip():
+                            lines.append(f"\n{bottom}")
+                        output = "\n".join(lines) if results else "결과 없음"
 
-            _threading.Thread(target=_run, daemon=True).start()
+                        def _done():
+                            c5_result.configure(state="normal")
+                            c5_result.delete("1.0", "end")
+                            c5_result.insert("1.0", output)
+                            c5_result.configure(state="disabled")
+                            c5_status.configure(text=f"✅ {len(results)}개 수집 완료", text_color=C["ok"])
+                            c5_collect_btn.configure(state="normal")
+                        dlg.after(0, _done)
+                    except Exception as e:
+                        def _err(msg=str(e)):
+                            c5_result.configure(state="normal")
+                            c5_result.delete("1.0", "end")
+                            c5_result.insert("1.0", f"오류: {msg}")
+                            c5_result.configure(state="disabled")
+                            c5_status.configure(text="❌ 오류", text_color=C["err"])
+                            c5_collect_btn.configure(state="normal")
+                        dlg.after(0, _err)
 
-        c5_collect_btn = _btn(c5_top, "수집", _c5_collect, w=70, h=32)
-        c5_collect_btn.pack(side="left")
+                _threading.Thread(target=_run, daemon=True).start()
+
+            c5_collect_btn = _btn(c5_top, "수집", _c5_collect, w=70, h=32)
+            c5_collect_btn.pack(side="left")
+
+            _t5_save[0] = _c5_save_opts
+
+        # ── 탭6 내용: 자동봇 설정 ────────────────────────
+        import yaml as _yaml_t6
+        _auto_cfg_path = _BASE_DIR / "auto" / "config.yaml"
+        try:
+            with open(_auto_cfg_path, encoding="utf-8") as _f6:
+                _auto_cfg = _yaml_t6.safe_load(_f6) or {}
+        except Exception:
+            _auto_cfg = {}
+        _a6sc  = _auto_cfg.get("scenario", {})
+        _a6act = _auto_cfg.get("actions", {})
+        _a6br  = _auto_cfg.get("browser", {})
+
+        _t6_headless   = ctk.BooleanVar(value=_a6br.get("headless", True))
+        _t6_act_keys   = ["home","search","news","blog","mail","kin","shopping","weather","finance"]
+        _t6_act_lbls   = ["홈 탐색","키워드 검색","뉴스 읽기","블로그 검색","메일 확인","지식iN","쇼핑 탐색","날씨 확인","증권 확인"]
+        _t6_act_vars   = {k: ctk.BooleanVar(value=_a6act.get(k, True)) for k in _t6_act_keys}
+        _t6_c = {}       # entry widget refs — populated by _build_t6_widgets
+        _t6_built = [False]
+
+        def _build_t6_widgets():
+            t6_sf = ctk.CTkFrame(tab6_content, fg_color="transparent")
+            t6_sf.pack(fill="both", expand=True, padx=0, pady=0)
+
+            _lbl(t6_sf, "브라우저", font=F_B).pack(anchor="w", pady=(8, 4))
+            _t6_br_card = ctk.CTkFrame(t6_sf, fg_color=C["accent_bg"], corner_radius=8)
+            _t6_br_card.pack(fill="x", pady=(0, 10))
+            ctk.CTkCheckBox(_t6_br_card, text="백그라운드 실행 (headless — 브라우저 창 숨김)",
+                            variable=_t6_headless, font=F,
+                            text_color=C["text"], fg_color=C["accent"],
+                            hover_color=C["accent_h"], checkmark_color="white",
+                            ).pack(anchor="w", padx=12, pady=8)
+
+            _lbl(t6_sf, "액션 사용", font=F_B).pack(anchor="w", pady=(0, 4))
+            _t6_act_card = ctk.CTkFrame(t6_sf, fg_color=C["accent_bg"], corner_radius=8)
+            _t6_act_card.pack(fill="x", pady=(0, 10))
+            for _i6, (_k6, _l6) in enumerate(zip(_t6_act_keys, _t6_act_lbls)):
+                _r6, _c6 = divmod(_i6, 5)
+                ctk.CTkCheckBox(_t6_act_card, text=_l6, variable=_t6_act_vars[_k6],
+                                font=F, text_color=C["text"],
+                                fg_color=C["accent"], hover_color=C["accent_h"],
+                                checkmark_color="white",
+                                ).grid(row=_r6, column=_c6, sticky="w",
+                                       padx=(12 if _c6 == 0 else 0, 16), pady=5)
+
+            _lbl(t6_sf, "수치 설정", font=F_B).pack(anchor="w", pady=(0, 4))
+            _t6_num_card = ctk.CTkFrame(t6_sf, fg_color=C["accent_bg"], corner_radius=8)
+            _t6_num_card.pack(fill="x", pady=(0, 8))
+
+            def _t6e(parent, row, col, w=58):
+                e = _UndoEntry(parent, height=28, width=w, font=F_SM,
+                               fg_color=C["input_bg"], border_color=C["border"],
+                               text_color=C["text"], corner_radius=7)
+                e.grid(row=row, column=col, sticky="w", padx=(0, 4), pady=3)
+                return e
+
+            def _sc_rng(key, def_min, def_max):
+                v = _a6sc.get(key, {})
+                if isinstance(v, dict):
+                    return v.get("min", def_min), v.get("max", def_max)
+                return (v, v) if v else (def_min, def_max)
+
+            # 수치 grid — 좌우 2항목씩 4행
+            # cols: 0=좌라벨, 1=min, 2=~, 3=max, 4=간격, 5=우라벨, 6=min, 7=~, 8=max
+            _rg = ctk.CTkFrame(_t6_num_card, fg_color="transparent")
+            _rg.pack(fill="x", pady=(4, 4))
+            _rg.columnconfigure(4, minsize=10)
+
+            def _gl(text, row, col, lx=(12, 8), py=3):
+                _lbl(_rg, text, font=F_SM, color=C["subtext"]).grid(
+                    row=row, column=col, sticky="w", padx=lx, pady=py)
+
+            def _gt(row, col):
+                _lbl(_rg, "~", font=F_SM, color=C["subtext"]).grid(
+                    row=row, column=col, padx=2, pady=3)
+
+            # row 0: 검색 클릭 수 | 뉴스 기사 수
+            _srch_min, _srch_max = _sc_rng("search_click_count", 2, 4)
+            _news_min, _news_max = _sc_rng("news_article_count", 2, 5)
+            _gl("검색 클릭 수", 0, 0)
+            _t6_srch_min_e = _t6e(_rg, 0, 1); _t6_srch_min_e.insert(0, str(_srch_min))
+            _gt(0, 2)
+            _t6_srch_max_e = _t6e(_rg, 0, 3); _t6_srch_max_e.insert(0, str(_srch_max))
+            _gl("뉴스 기사 수", 0, 5, lx=(16, 8))
+            _t6_news_min_e = _t6e(_rg, 0, 6); _t6_news_min_e.insert(0, str(_news_min))
+            _gt(0, 7)
+            _t6_news_max_e = _t6e(_rg, 0, 8); _t6_news_max_e.insert(0, str(_news_max))
+
+            # row 1: 메일 읽기 수 | 실행당 키워드 수
+            _mail_min, _mail_max = _sc_rng("mail_read_count", 1, 3)
+            _gl("메일 읽기 수", 1, 0)
+            _t6_mail_min_e = _t6e(_rg, 1, 1); _t6_mail_min_e.insert(0, str(_mail_min))
+            _gt(1, 2)
+            _t6_mail_max_e = _t6e(_rg, 1, 3); _t6_mail_max_e.insert(0, str(_mail_max))
+            _gl("실행당 키워드 수", 1, 5, lx=(16, 8))
+            _t6_kwcnt_e = _t6e(_rg, 1, 6); _t6_kwcnt_e.insert(0, str(_a6sc.get("keyword_count", 20)))
+
+            # row 2: 액션 사이 대기 | 라운드 사이 휴식
+            _gl("액션 사이 대기 (초)", 2, 0)
+            _t6_dmin_e = _t6e(_rg, 2, 1); _t6_dmin_e.insert(0, str(_a6sc.get("between_action_delay", {}).get("min", 5)))
+            _gt(2, 2)
+            _t6_dmax_e = _t6e(_rg, 2, 3); _t6_dmax_e.insert(0, str(_a6sc.get("between_action_delay", {}).get("max", 15)))
+            _gl("라운드 사이 휴식 (초)", 2, 5, lx=(16, 8))
+            _t6_rmin_e = _t6e(_rg, 2, 6); _t6_rmin_e.insert(0, str(_a6sc.get("round_rest", {}).get("min", 30)))
+            _gt(2, 7)
+            _t6_rmax_e = _t6e(_rg, 2, 8); _t6_rmax_e.insert(0, str(_a6sc.get("round_rest", {}).get("max", 90)))
+
+            # row 3: 페이지 체류 시간
+            _gl("페이지 체류 시간 (초)", 3, 0, py=(3, 8))
+            _t6_dwell_min_e = _t6e(_rg, 3, 1); _t6_dwell_min_e.insert(0, str(_a6sc.get("page_dwell", {}).get("min", 4)))
+            _gt(3, 2)
+            _t6_dwell_max_e = _t6e(_rg, 3, 3); _t6_dwell_max_e.insert(0, str(_a6sc.get("page_dwell", {}).get("max", 12)))
+
+            _lbl(t6_sf, "키워드 풀 (;로 구분)", font=F_B).pack(anchor="w", pady=(0, 4))
+            _kw_outer = ctk.CTkFrame(t6_sf, fg_color=C["input_bg"],
+                                     border_color=C["border"], border_width=1,
+                                     corner_radius=6)
+            _kw_outer.pack(fill="x", pady=(0, 8))
+            _kw_outer.pack_propagate(True)
+            _t6_kw_sb = tk.Scrollbar(_kw_outer)
+            _t6_kw_sb.pack(side="right", fill="y", pady=2)
+            _t6_kw_box = tk.Text(_kw_outer, height=5, font=F_SM,
+                                  bg=C["input_bg"], fg=C["text"],
+                                  insertbackground=C["text"],
+                                  relief="flat", bd=0, padx=6, pady=4,
+                                  wrap="char", highlightthickness=0,
+                                  yscrollcommand=_t6_kw_sb.set)
+            _t6_kw_box.pack(side="left", fill="both", expand=True)
+            _t6_kw_sb.config(command=_t6_kw_box.yview)
+            kw_text = ";".join(_auto_cfg.get("keywords", []))
+            if kw_text:
+                _t6_kw_box.insert("1.0", kw_text)
+            _t6_c.update({
+                "srch_min": _t6_srch_min_e, "srch_max": _t6_srch_max_e,
+                "news_min": _t6_news_min_e, "news_max": _t6_news_max_e,
+                "mail_min": _t6_mail_min_e, "mail_max": _t6_mail_max_e,
+                "kwcnt": _t6_kwcnt_e, "dmin": _t6_dmin_e, "dmax": _t6_dmax_e,
+                "rmin": _t6_rmin_e, "rmax": _t6_rmax_e,
+                "dwell_min": _t6_dwell_min_e, "dwell_max": _t6_dwell_max_e,
+                "kw": _t6_kw_box,
+            })
+
+        def _save_auto():
+            import yaml as _yaml_sv
+            try:
+                with open(_auto_cfg_path, encoding="utf-8") as _f:
+                    _c = _yaml_sv.safe_load(_f) or {}
+            except Exception:
+                _c = {}
+            _c.setdefault("browser", {})["headless"] = _t6_headless.get()
+            _c["actions"] = {k: v.get() for k, v in _t6_act_vars.items()}
+            _sc2 = _c.setdefault("scenario", {})
+            def _iv(e, d):
+                if e is None: return d
+                try: return int(e.get().strip())
+                except Exception: return d
+            _sc2["search_click_count"] = {"min": _iv(_t6_c.get("srch_min"), 2), "max": _iv(_t6_c.get("srch_max"), 4)}
+            _sc2["news_article_count"] = {"min": _iv(_t6_c.get("news_min"), 2), "max": _iv(_t6_c.get("news_max"), 5)}
+            _sc2["mail_read_count"]    = {"min": _iv(_t6_c.get("mail_min"), 1), "max": _iv(_t6_c.get("mail_max"), 3)}
+            _sc2["keyword_count"]               = _iv(_t6_c.get("kwcnt"), 20)
+            _sc2.setdefault("between_action_delay", {})
+            _sc2["between_action_delay"]["min"] = _iv(_t6_c.get("dmin"), 5)
+            _sc2["between_action_delay"]["max"] = _iv(_t6_c.get("dmax"), 15)
+            _sc2.setdefault("round_rest", {})
+            _sc2["round_rest"]["min"]           = _iv(_t6_c.get("rmin"), 30)
+            _sc2["round_rest"]["max"]           = _iv(_t6_c.get("rmax"), 90)
+            _sc2.setdefault("page_dwell", {})
+            _sc2["page_dwell"]["min"]           = _iv(_t6_c.get("dwell_min"), 4)
+            _sc2["page_dwell"]["max"]           = _iv(_t6_c.get("dwell_max"), 12)
+            _kw_box = _t6_c.get("kw")
+            _kw_raw = _kw_box.get("1.0", "end").strip() if _kw_box else ""
+            _c["keywords"] = [k.strip() for k in _kw_raw.split(";") if k.strip()]
+            try:
+                with open(_auto_cfg_path, "w", encoding="utf-8") as _f:
+                    _yaml_sv.dump(_c, _f, allow_unicode=True,
+                                  default_flow_style=False, sort_keys=False)
+            except Exception as _e:
+                import tkinter.messagebox as _mb2
+                _mb2.showerror("자동봇 설정 저장 실패", str(_e), parent=dlg)
+                return
+            save_notify.configure(text="✅ 저장됨")
+            dlg.after(2000, lambda: save_notify.configure(text=""))
 
         # ── 탭1을 기본으로 표시 ───────────────────────────
         def _do_save():
             n = active_tab[0]
-            if n in (1, 2):   _save()
-            elif n == 3:      _save_mac()
-            elif n == 4:      _save_topics()
-            elif n == 5:      _c5_save_opts()
+            if n in (1, 2):              _save()
+            elif n == 3 and _t3_save[0]: _t3_save[0]()
+            elif n == 4 and _t4_save[0]: _t4_save[0]()
+            elif n == 5 and _t5_save[0]: _t5_save[0]()
+            elif n == 6:                 _save_auto()
 
         # ── 하단 버튼 내용 채우기 ─────────────────────────
         save_notify = ctk.CTkLabel(btn_row, text="", font=F_SM, text_color=C["ok"])
@@ -4237,10 +4724,12 @@ Remove-Item -Path (Split-Path $log) -Recurse -Force -ErrorAction SilentlyContinu
             working_names[cur_idx[0]]   = name_entry.get().strip() or f"옵션 {cur_idx[0]+1}"
             working[cur_idx[0]]         = txt1.get("1.0", "end").strip()
             working2[cur_idx[0]]        = txt2.get("1.0", "end").strip()
-            working_kw2[cur_idx[0]]     = kw2_var.get()
+            if not working_collect[cur_idx[0]]:
+                working_kw2[cur_idx[0]] = kw2_var.get()
             working_topic[cur_idx[0]]   = topic_var.get()
             working_collect[cur_idx[0]] = collect_var.get()
             working_enabled[cur_idx[0]] = enabled_var.get()
+            working_guest[cur_idx[0]]   = guest_var.get()
             self._prompts             = list(working)
             self._prompts2            = list(working2)
             self._kw2_enabled         = list(working_kw2)
@@ -4248,6 +4737,7 @@ Remove-Item -Path (Split-Path $log) -Recurse -Force -ErrorAction SilentlyContinu
             self._collect_enabled     = list(working_collect)
             self._option_enabled      = list(working_enabled)
             self._prompt_names        = list(working_names)
+            self._guest_prompt_enabled = list(working_guest)
             try: self._collect_count    = int(c5_opt_count_var.get())
             except Exception: pass
             try: self._collect_skip     = int(c5_opt_skip_var.get())
@@ -4341,7 +4831,7 @@ Remove-Item -Path (Split-Path $log) -Recurse -Force -ErrorAction SilentlyContinu
         token_row = ctk.CTkFrame(sync_area, fg_color="transparent")
         token_row.pack(fill="x", pady=(0, 4))
         _lbl(token_row, "🐙 GitHub 토큰", font=F_SM, color=C["subtext"]).pack(side="left", padx=(0, 8))
-        gh_token_entry = ctk.CTkEntry(
+        gh_token_entry = _UndoEntry(
             token_row, height=28, font=F_SM,
             fg_color=C["input_bg"], border_color=C["border"],
             text_color=C["text"], corner_radius=7,
@@ -4353,7 +4843,7 @@ Remove-Item -Path (Split-Path $log) -Recurse -Force -ErrorAction SilentlyContinu
 
         sync_row = ctk.CTkFrame(sync_area, fg_color="transparent")
         sync_row.pack(fill="x")
-        sync_url_entry = ctk.CTkEntry(
+        sync_url_entry = _UndoEntry(
             sync_row, height=32, font=F_SM,
             fg_color=C["input_bg"], border_color=C["border"],
             text_color=C["text"], corner_radius=7,
@@ -4399,7 +4889,15 @@ Remove-Item -Path (Split-Path $log) -Recurse -Force -ErrorAction SilentlyContinu
                 "var_settings_flickr": {k: v for k, v in self._var_settings_flickr.items()},
                 "max_width":      self._max_width,
                 "mac_entries":    list(self._mac_entries),
+                "guest_prompt_enabled": list(self._guest_prompt_enabled),
             }
+            try:
+                import yaml as _yaml_up
+                _auto_p = _BASE_DIR / "auto" / "config.yaml"
+                with open(_auto_p, encoding="utf-8") as _f:
+                    data["auto_config"] = _yaml_up.safe_load(_f) or {}
+            except Exception:
+                pass
             self.sync_status_lbl.configure(
                 text="🔄 Gist 업로드 중...", text_color=C["accent"])
             threading.Thread(
@@ -4437,7 +4935,7 @@ Remove-Item -Path (Split-Path $log) -Recurse -Force -ErrorAction SilentlyContinu
         except Exception:
             return ""
 
-    def _gen_all(self, kw, kw2, count):
+    def _gen_all(self, kw, kw2, collect_kw2, count):
         self._start_timer()
         try:
             err_box = []
@@ -4478,20 +4976,26 @@ Remove-Item -Path (Split-Path $log) -Recurse -Force -ErrorAction SilentlyContinu
                     effective_kw = f"{kw} 전문 블로거가 쓸는 {_topic_item}"
                 parts = []
                 if self._collect_enabled[idx]:
-                    self._set_text_status("인기글 수집 중...", 0.05)
-                    ref = self._collect_reference(kw)  # 헤더 + 수집글 + 바텀 포함
+                    self._set_text_status("자료 수집 중...", 0.05)
+                    ref = self._collect_reference(kw)
+                    self._set_text_status("수집 완료", 0.15)
+                    parts.append(effective_kw)
+                    parts.append("키워드로 블로그 포스팅을 작성.")
+                    parts.append("참고 제목은 아래와 같아")
+                    if collect_kw2:
+                        parts.append(collect_kw2)
                     if ref:
                         parts.append(ref)
-                parts.append(effective_kw)
-                if self._prompts[idx]:
-                    parts.append(self._prompts[idx])
-                if self._collect_enabled[idx]:
-                    # 인기글 모드: 업체명을 프롬포트 맨 끝에
+                    if self._prompts[idx]:
+                        parts.append(self._prompts[idx])
                     if kw2:
                         parts.append(kw2)
                         if self._collect_ending:
                             parts.append(self._collect_ending)
                 else:
+                    parts.append(effective_kw)
+                    if self._prompts[idx]:
+                        parts.append(self._prompts[idx])
                     # 일반 주제 모드
                     if kw2:
                         parts.append(kw2)
@@ -4541,12 +5045,13 @@ Remove-Item -Path (Split-Path $log) -Recurse -Force -ErrorAction SilentlyContinu
         kw2 = (self.kw2_entry.get().strip()
                if not self._topic_enabled[idx] and (self._kw2_enabled[idx] or not self._collect_enabled[idx])
                else "")
+        collect_kw2 = self.collect_kw_entry.get().strip() if self._collect_enabled[idx] else ""
         self._reset_outputs(reset_images=False)
         self._lock_btns(True)
         self.timer_label.configure(text="", text_color=C["accent"])
-        threading.Thread(target=self._gen_text_only, args=(kw, kw2), daemon=True).start()
+        threading.Thread(target=self._gen_text_only, args=(kw, kw2, collect_kw2), daemon=True).start()
 
-    def _gen_text_only(self, kw, kw2):
+    def _gen_text_only(self, kw, kw2, collect_kw2=""):
         self._ensure_browser()
         self._start_timer()
         idx = self._selected_prompt_idx
@@ -4559,21 +5064,27 @@ Remove-Item -Path (Split-Path $log) -Recurse -Force -ErrorAction SilentlyContinu
                     effective_kw = f"{kw} 전문 블로거가 쓸는 {random.choice(stored)}"
             parts = []
             if self._collect_enabled[idx]:
-                self._set_text_status("인기글 수집 중...", 0.05)
-                self._set_status("🔄  인기글 수집 중...", color=C["accent"])
-                ref = self._collect_reference(kw)  # 헤더 + 수집글 + 바텀 포함
+                self._set_text_status("자료 수집 중...", 0.05)
+                self._set_status("🔄  자료 수집 중...", color=C["accent"])
+                ref = self._collect_reference(kw)
+                self._set_text_status("수집 완료", 0.15)
+                parts.append(effective_kw)
+                parts.append("키워드로 블로그 포스팅을 작성.")
+                parts.append("참고 제목은 아래와 같아")
+                if collect_kw2:
+                    parts.append(collect_kw2)
                 if ref:
                     parts.append(ref)
-            parts.append(effective_kw)
-            if self._prompts[idx]:
-                parts.append(self._prompts[idx])
-            if self._collect_enabled[idx]:
-                # 인기글 모드: 업체명을 프롬포트 맨 끝에
+                if self._prompts[idx]:
+                    parts.append(self._prompts[idx])
                 if kw2:
                     parts.append(kw2)
                     if self._collect_ending:
                         parts.append(self._collect_ending)
             else:
+                parts.append(effective_kw)
+                if self._prompts[idx]:
+                    parts.append(self._prompts[idx])
                 # 일반 주제 모드
                 if kw2:
                     parts.append(kw2)
@@ -4609,7 +5120,7 @@ Remove-Item -Path (Split-Path $log) -Recurse -Force -ErrorAction SilentlyContinu
     def _start_image_only(self):
         kw = self._check_ready()
         if not kw: return
-        if not config.CF_ACCOUNT_ID or not config.CF_API_TOKEN:
+        if getattr(self, "_img_source", "AI") not in ("픽숨", "플리커") and (not config.CF_ACCOUNT_ID or not config.CF_API_TOKEN):
             self._set_status("⚠️  설정 탭에서 Cloudflare 자격증명을 먼저 입력해 주세요.", color=C["err"]); return
         self._stop_event.clear()
         count = self._get_img_count()
@@ -4681,51 +5192,109 @@ Remove-Item -Path (Split-Path $log) -Recurse -Force -ErrorAction SilentlyContinu
     ]
 
     def _gen_images_picsum(self, count, kw=""):
+        from concurrent.futures import ThreadPoolExecutor, as_completed
         import urllib.request as _ur, io as _io
         pw = max(100, self._picsum_width)
         ph = max(100, self._picsum_height)
         url = f"https://picsum.photos/{pw}/{ph}"
-        for i in range(1, count + 1):
+
+        def _fetch(idx):
+            if self._stop_event.is_set():
+                return idx, None
+            try:
+                with _ur.urlopen(url, timeout=8) as r:
+                    return idx, Image.open(_io.BytesIO(r.read())).convert("RGB")
+            except Exception:
+                return idx, None
+
+        self._set_img_status(f"이미지 {count}장 다운로드 중...", 0.05)
+        results = [None] * count
+        done_dl = 0
+        with ThreadPoolExecutor(max_workers=min(count, 30)) as pool:
+            futs = {pool.submit(_fetch, i): i for i in range(count)}
+            for fut in as_completed(futs):
+                idx, img = fut.result()
+                results[idx] = img
+                done_dl += 1
+                self._set_img_status(f"다운로드 {done_dl}/{count}...", done_dl / count * 0.6)
+
+        for i, pil_img in enumerate(results):
             if self._stop_event.is_set():
                 self._set_img_status("중단됨", 0, C["err"])
                 break
-            self._set_img_status(f"이미지 {i}/{count} 가져오는 중...", (i - 1) / count)
-            try:
-                with _ur.urlopen(url, timeout=15) as r:
-                    pil_img = Image.open(_io.BytesIO(r.read())).convert("RGB")
-            except Exception as e:
-                self._set_img_status(f"이미지 {i} 실패: {str(e)[:40]}", (i-1)/count, C["err"])
+            if pil_img is None:
                 pil_img = image_generator.create_placeholder_image()
             _wm = datetime.now().strftime("%m%d%H%M%S")
             pil_img = self._apply_variation(pil_img, vs=self._var_settings_picsum, wm_text=_wm)
-            self._show_image(i - 1, pil_img)
-            self._set_img_status(f"이미지 {i}/{count} 완료", i / count)
+            self._show_image(i, pil_img)
+            self._set_img_status(f"이미지 {i + 1}/{count} 완료", (i + 1) / count)
         if not self._stop_event.is_set():
-            self.after(0, lambda: self._img_hscroll.enable(True))
+            def _enable_scroll_picsum():
+                bb = self._img_canvas.bbox("all")
+                if bb:
+                    self._img_canvas.configure(scrollregion=(0, 0, bb[2] + 4, bb[3] + 8))
+                self._img_hscroll.enable(True)
+            self.after(100, _enable_scroll_picsum)
             self._auto_save_source_images(count, "픽숨", kw=kw)
 
     _FLICKR_KW = [
-        "nature", "landscape", "city", "travel", "architecture",
-        "food", "street", "flower", "ocean", "mountain",
-        "forest", "sky", "sunset", "market", "building",
+        # 자연/풍경
+        "nature", "landscape", "ocean", "mountain", "forest", "sky", "sunset", "flower",
+        "river", "lake", "waterfall", "cliff", "valley", "desert", "jungle", "field",
+        "horizon", "clouds", "fog", "sunrise", "meadow", "coast", "reef", "glacier",
+        # 도시/건축
+        "city", "architecture", "street", "building", "bridge", "rooftop", "alley",
+        "skyline", "downtown", "subway", "tunnel", "staircase", "window", "facade",
+        "plaza", "tower", "cathedral", "ruins", "construction", "pathway",
+        # 음식/카페
+        "food", "coffee", "cafe", "bakery", "restaurant", "cooking", "dessert",
+        "bread", "pasta", "sushi", "salad", "pizza", "tea", "cocktail", "fruit",
+        "vegetables", "cheese", "chocolate", "brunch", "streetfood", "grill",
+        # 라이프스타일/사람
+        "lifestyle", "fashion", "portrait", "people", "family", "friends",
+        "reading", "music", "dance", "yoga", "meditation", "work", "study",
+        "shopping", "walking", "laughing", "couple", "children", "elderly",
+        # 동물
+        "cat", "dog", "bird", "wildlife", "animals",
+        "horse", "rabbit", "fox", "deer", "butterfly", "fish", "turtle", "owl",
+        # 여행/문화
+        "travel", "market", "festival", "museum", "art", "culture",
+        "temple", "lantern", "carnival", "street-art", "vintage", "craft",
+        "ceremony", "tradition", "souvenir", "landmark", "passport", "luggage",
+        # 스포츠/활동
+        "sport", "cycling", "running", "beach", "surfing", "climbing",
+        "swimming", "tennis", "basketball", "football", "hiking", "skateboard",
+        "rowing", "skiing", "martial-arts", "gym", "workout",
+        # 인테리어/공간
+        "interior", "library", "workspace", "garden", "park",
+        "bedroom", "kitchen", "studio", "loft", "greenhouse", "patio",
+        "bookshelf", "sofa", "lamp", "decoration", "minimalist", "cozy",
+        # 계절/날씨
+        "autumn", "winter", "spring", "rain", "snow",
+        "golden-hour", "storm", "thunder", "ice", "frost", "rainbow", "haze",
+        # 야경/야외
+        "night", "lights", "neon", "fireworks",
+        "stars", "milkyway", "campfire", "lanterns", "streetlight", "reflection",
+        # 추상/텍스처
+        "texture", "pattern", "abstract", "color", "bokeh", "shadow", "smoke",
+        "graffiti", "rust", "wood", "stone", "fabric", "glass", "metal",
     ]
 
     def _gen_images_flickr(self, count, kw=""):
+        from concurrent.futures import ThreadPoolExecutor, as_completed
         import urllib.request as _ur, io as _io
         fw = max(100, self._flickr_width)
         fh = max(100, self._flickr_height)
         _search_kw = self._flickr_keyword.strip() if self._flickr_keyword.strip() else None
         collected = 0
         attempt = 0
-        max_attempts = count * 6  # 불량 이미지 재시도 고려해 여유 있게 설정
-        while collected < count and attempt < max_attempts:
+        max_attempts = count * 6
+
+        def _fetch(idx):
             if self._stop_event.is_set():
-                self._set_img_status("중단됨", 0, C["err"])
-                break
-            attempt += 1
-            self._set_img_status(f"이미지 {collected + 1}/{count} 가져오는 중...", collected / count)
+                return None
             try:
-                _t = int(time.time() * 1000) + attempt
+                _t = int(time.time() * 1000) + idx
                 _kw = _search_kw or random.choice(self._FLICKR_KW)
                 _req = _ur.Request(
                     f"https://loremflickr.com/{fw}/{fh}/{_kw}?t={_t}",
@@ -4733,21 +5302,41 @@ Remove-Item -Path (Split-Path $log) -Recurse -Force -ErrorAction SilentlyContinu
                              "Cache-Control": "no-cache, no-store",
                              "Pragma": "no-cache"},
                 )
-                with _ur.urlopen(_req, timeout=15) as r:
-                    pil_img = Image.open(_io.BytesIO(r.read())).convert("RGB")
-            except Exception as e:
-                self._set_img_status(f"이미지 {collected + 1} 실패: {str(e)[:40]}", collected / count, C["err"])
-                continue
-            if self._is_mostly_solid(pil_img):
-                # 단색 배경 불량 이미지 — 목록에 표시하지 않고 재시도
-                continue
-            _wm = datetime.now().strftime("%m%d%H%M%S")
-            pil_img = self._apply_variation(pil_img, vs=self._var_settings_flickr, wm_text=_wm)
-            self._show_image(collected, pil_img)
-            collected += 1
-            self._set_img_status(f"이미지 {collected}/{count} 완료", collected / count)
+                with _ur.urlopen(_req, timeout=8) as r:
+                    return Image.open(_io.BytesIO(r.read())).convert("RGB")
+            except Exception:
+                return None
+
+        while collected < count and attempt < max_attempts:
+            if self._stop_event.is_set():
+                self._set_img_status("중단됨", 0, C["err"])
+                break
+            need = count - collected
+            batch = min(need + 2, max_attempts - attempt, 30)
+            self._set_img_status(f"이미지 {collected + 1}/{count} 가져오는 중...", collected / count)
+            with ThreadPoolExecutor(max_workers=batch) as pool:
+                futs = [pool.submit(_fetch, attempt + i) for i in range(batch)]
+                attempt += batch
+                for fut in as_completed(futs):
+                    if self._stop_event.is_set() or collected >= count:
+                        break
+                    pil_img = fut.result()
+                    if pil_img is None:
+                        continue
+                    if self._is_mostly_solid(pil_img) or self._has_excessive_red(pil_img):
+                        continue
+                    _wm = datetime.now().strftime("%m%d%H%M%S")
+                    pil_img = self._apply_variation(pil_img, vs=self._var_settings_flickr, wm_text=_wm)
+                    self._show_image(collected, pil_img)
+                    collected += 1
+                    self._set_img_status(f"이미지 {collected}/{count} 완료", collected / count)
         if not self._stop_event.is_set():
-            self.after(0, lambda: self._img_hscroll.enable(True))
+            def _enable_scroll_flickr():
+                bb = self._img_canvas.bbox("all")
+                if bb:
+                    self._img_canvas.configure(scrollregion=(0, 0, bb[2] + 4, bb[3] + 8))
+                self._img_hscroll.enable(True)
+            self.after(100, _enable_scroll_flickr)
             self._auto_save_source_images(count, "플리커", kw=kw)
 
     def _gen_images(self, prompt, count, start_prog=0, kw=""):
@@ -4804,16 +5393,32 @@ Remove-Item -Path (Split-Path $log) -Recurse -Force -ErrorAction SilentlyContinu
             if self._stop_event.is_set():
                 self._set_img_status("중단됨", 0, C["err"])
                 break
-            try:
-                pil_img = image_generator.generate_to_memory(varied_prompt, seed=seed)
-            except Exception as e:
-                self._set_img_status(f"이미지 {i} 실패: {str(e)[:40]}", prog, C["err"])
-                pil_img = image_generator.create_placeholder_image()
+            pil_img = None
+            for _attempt in range(3):
+                try:
+                    _img = image_generator.generate_to_memory(varied_prompt, seed=seed + _attempt)
+                    if self._is_solid_color_image(_img):
+                        self._set_img_status(f"이미지 {i} 단색 감지, 재시도 {_attempt+1}/3...", prog)
+                        continue
+                    pil_img = _img
+                    break
+                except Exception as e:
+                    self._set_img_status(f"이미지 {i} 실패: {str(e)[:40]}", prog, C["err"])
+                    break
+            if pil_img is None:
+                self._set_img_status(f"이미지 {i} 생성 실패 (단색)", prog, C["err"])
+                continue
             self._show_image(i - 1, pil_img)
             prog = i / count
             self._set_img_status(f"이미지 {i}/{count} 완료", prog)
             if i == count:
                 self.after(0, lambda: self._img_hscroll.enable(True))
+
+    @staticmethod
+    def _is_solid_color_image(pil_img, threshold=12):
+        import numpy as np
+        arr = np.array(pil_img.convert("RGB"))
+        return float(arr.std()) < threshold
 
     def _reset_outputs(self, reset_images=True):
         self.content_box.set_markdown("")
@@ -5088,13 +5693,17 @@ Remove-Item -Path (Split-Path $log) -Recurse -Force -ErrorAction SilentlyContinu
         else:
             kw = self.keyword_entry.get().strip()
         kw = _re.sub(r'[\\/:*?"<>|\s]+', '_', kw)[:30] or "images"
-        folder_name = f"{kw}_{_t.strftime('%m%d%H%M%S')}"
+        folder_name = f"{_t.strftime('%m%d%H%M%S')}_{kw}"
         if self._last_out_dir and self._last_out_dir.parent.exists():
             base = self._last_out_dir.parent
         elif self._variation_output_dir:
             base = Path(self._variation_output_dir)
         else:
             base = Path.home() / "Desktop"
+        images_to_save = [p for p in self._img_pil if p is not None]
+        if not images_to_save:
+            self._set_status("생성된 이미지가 없습니다.", color=C["err"])
+            return
         dest = base / folder_name
         dest.mkdir(parents=True, exist_ok=True)
         date_tag = _t.strftime('%m%d%H%M')
@@ -5108,18 +5717,14 @@ Remove-Item -Path (Split-Path $log) -Recurse -Force -ErrorAction SilentlyContinu
                     fname = f"{kw}_{date_tag}_{saved + 1}.png"
                 pil_img.save(dest / fname)
                 saved += 1
-        if saved:
-            self._set_status(f"✅  {saved}개 파일을 {dest.name}에 저장했습니다.", color=C["ok"])
-        else:
-            self._set_status("⚠️  저장할 파일이 없습니다. 먼저 생성해 주세요.", color=C["err"])
+        self._set_status(f"✅  {saved}개 파일을 {dest.name}에 저장했습니다.", color=C["ok"])
 
     def _auto_save_source_images(self, count: int, src: str, kw: str = ""):
         """PICSUM/FLICKR 이미지 생성 후 count >= 10이면 자동 저장."""
         if count < 10:
             return
-        import time as _t, re as _re
-        label = _re.sub(r'[\\/:*?"<>|\s]+', '_', kw.strip())[:20] if kw.strip() else src.lower()
-        folder_name = f"{label}_{_t.strftime('%m%d%H%M%S')}"
+        import time as _t
+        folder_name = _t.strftime('%m%d%H%M%S')
         if self._variation_output_dir:
             base = Path(self._variation_output_dir)
         else:
@@ -5139,6 +5744,24 @@ Remove-Item -Path (Split-Path $log) -Recurse -Force -ErrorAction SilentlyContinu
                 f"✅ {n}개 자동 저장 완료 → {d}", 1.0, C["ok"]))
 
 
+def _naver_auto_worker(naver_dir: str):
+    """별도 프로세스에서 naver-auto를 실행하는 엔트리포인트."""
+    import sys, os, io, runpy
+
+    # windowed 앱에서 stdout/stderr가 None → multiprocessing spawn 오류 방지
+    if sys.stdout is None:
+        sys.stdout = io.StringIO()
+    if sys.stderr is None:
+        sys.stderr = io.StringIO()
+
+    sys.frozen = False  # get_base_dir()가 __file__ 기준으로 동작하도록
+    sys.path.insert(0, naver_dir)
+    os.chdir(naver_dir)
+    runpy.run_path(os.path.join(naver_dir, "main.py"), run_name="__main__")
+
+
 if __name__ == "__main__":
+    import multiprocessing
+    multiprocessing.freeze_support()
     app = App()
     app.mainloop()

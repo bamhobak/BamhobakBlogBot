@@ -81,7 +81,10 @@ async def _do_login(browser, ua):
     print("[로그인] Chrome 창에서 네이버에 로그인해주세요...")
 
     prev_down = False
+    prev_clip = _get_clipboard().strip()
     filled = 0
+
+    print(f"[로그인] 초기 클립보드 길이: {len(prev_clip)}자")
 
     for _ in range(6000):  # 50ms × 6000 = 5분
         await asyncio.sleep(0.05)
@@ -90,22 +93,35 @@ async def _do_login(browser, ua):
             raise asyncio.CancelledError()
 
         if filled < 2:
+            # 방법1: Ctrl+V 키 감지
             now_down = _ctrl_v_down()
-            if now_down and not prev_down:
-                await asyncio.sleep(0.05)  # 클립보드 확정 대기
+            triggered = now_down and not prev_down
+            prev_down = now_down
+
+            # 방법2: 클립보드 변경 감지 (Ctrl+V 감지 안 될 때 백업)
+            curr_clip = _get_clipboard().strip()
+            if not triggered and curr_clip and curr_clip != prev_clip:
+                triggered = True
+                print("[로그인] 클립보드 변경 감지")
+
+            if triggered:
+                await asyncio.sleep(0.05)
                 clip = _get_clipboard().strip()
+                print(f"[로그인] 붙여넣기 감지 — 클립보드 {len(clip)}자")
+                prev_clip = clip
                 if clip:
                     try:
                         if filled == 0:
                             await page.locator('#id').fill(clip)
+                            print("[로그인] 아이디 입력 완료")
                         else:
                             await page.locator('#pw').fill(clip)
+                            print("[로그인] 비번 입력 완료")
                             await asyncio.sleep(0.3)
                             await page.locator('button[type=submit]').click()
                         filled += 1
-                    except Exception:
-                        pass
-            prev_down = now_down
+                    except Exception as e:
+                        print(f"[로그인] 입력 오류: {e}")
 
         if "naver.com" in page.url and "nidlogin" not in page.url:
             break

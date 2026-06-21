@@ -121,8 +121,7 @@ async def _do_login(playwright, browser, ua, headless: bool = True):
                         await old_browser.close()
                         headless = False
                     login_click_time = None
-                    filled = 0  # Ctrl+V로 재입력 허용
-                    print("[로그인] 아이디를 붙여넣어 주세요. (Ctrl+V)")
+                    print("[로그인] 로그인에 실패하였습니다. 크롬 창에서 직접 로그인해주세요.")
             except Exception as e:
                 print(f"[로그인] fallback 오류: {e}")
                 login_click_time = None

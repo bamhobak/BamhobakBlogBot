@@ -1,5 +1,6 @@
 import asyncio
-import subprocess
+import ctypes
+import ctypes.wintypes
 from utils import stopper
 
 
@@ -25,14 +26,24 @@ async def _make_context(browser, ua):
 
 def _get_clipboard():
     try:
-        r = subprocess.run(
-            ["powershell", "-NoProfile", "-Command", "Get-Clipboard"],
-            capture_output=True, text=True, timeout=3,
-            creationflags=subprocess.CREATE_NO_WINDOW,
-        )
-        return r.stdout.strip()
+        CF_UNICODETEXT = 13
+        ctypes.windll.user32.OpenClipboard(0)
+        handle = ctypes.windll.user32.GetClipboardData(CF_UNICODETEXT)
+        if not handle:
+            return ""
+        ptr = ctypes.windll.kernel32.GlobalLock(handle)
+        if not ptr:
+            return ""
+        text = ctypes.wstring_at(ptr)
+        ctypes.windll.kernel32.GlobalUnlock(handle)
+        return text
     except Exception:
         return ""
+    finally:
+        try:
+            ctypes.windll.user32.CloseClipboard()
+        except Exception:
+            pass
 
 
 async def _do_login(browser, ua):

@@ -15,35 +15,47 @@ def _ctrl_v_down():
 
 
 def _get_clipboard():
-    """클립보드 텍스트 읽기: ctypes → PowerShell 순 시도"""
-    try:
-        u = ctypes.windll.user32
-        k = ctypes.windll.kernel32
-        u.GetClipboardData.restype = ctypes.c_void_p
-        k.GlobalLock.restype = ctypes.c_void_p
-        if u.OpenClipboard(None):
-            try:
-                h = u.GetClipboardData(13)  # CF_UNICODETEXT
-                if h:
-                    p = k.GlobalLock(h)
-                    if p:
-                        try:
-                            return ctypes.wstring_at(p)
-                        finally:
-                            k.GlobalUnlock(h)
-            finally:
-                u.CloseClipboard()
-    except Exception:
-        pass
+    """클립보드 텍스트 읽기: ctypes → PowerShell(전체경로) 순 시도"""
+    # 1) ctypes: OpenClipboard 최대 3회 재시도
+    import time as _time
+    u = ctypes.windll.user32
+    k = ctypes.windll.kernel32
+    u.GetClipboardData.restype = ctypes.c_void_p
+    k.GlobalLock.restype = ctypes.c_void_p
+    for _ in range(3):
+        try:
+            if u.OpenClipboard(None):
+                try:
+                    h = u.GetClipboardData(13)  # CF_UNICODETEXT
+                    if h:
+                        p = k.GlobalLock(h)
+                        if p:
+                            try:
+                                return ctypes.wstring_at(p)
+                            finally:
+                                k.GlobalUnlock(h)
+                finally:
+                    u.CloseClipboard()
+        except Exception:
+            pass
+        _time.sleep(0.02)
+
+    # 2) PowerShell 전체 경로 (동결 exe 환경에서 PATH 없어도 동작)
+    import os
+    ps = os.path.join(
+        os.environ.get("SystemRoot", r"C:\Windows"),
+        "System32", "WindowsPowerShell", "v1.0", "powershell.exe",
+    )
     try:
         r = subprocess.run(
-            ["powershell", "-NoProfile", "-Command", "Get-Clipboard"],
-            capture_output=True, text=True, timeout=3,
+            [ps, "-NoProfile", "-Command", "Get-Clipboard"],
+            capture_output=True, text=True, timeout=5,
             creationflags=0x08000000,
         )
         return r.stdout.strip()
-    except Exception:
-        return ""
+    except Exception as e:
+        print(f"[클립보드] PowerShell 오류: {e}")
+    return ""
 
 
 async def _apply_stealth(context):

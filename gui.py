@@ -50,7 +50,7 @@ ctk.set_default_color_theme("blue")
 
 _BASE_DIR = Path(sys.executable).parent if getattr(sys, "frozen", False) else Path(__file__).parent
 ENV_PATH = _BASE_DIR / ".env"
-APP_VERSION = "v2.0.10"
+APP_VERSION = "v2.0.11"
 APP_TITLE   = f"Bamhobak Blog Bot {APP_VERSION}"
 
 _DEFAULT_GITHUB_TOKEN  = ""

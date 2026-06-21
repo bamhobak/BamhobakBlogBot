@@ -1,7 +1,49 @@
 import asyncio
 import ctypes
-import ctypes.wintypes
+import subprocess
 from utils import stopper
+
+_VK_CONTROL = 0x11
+_VK_V = 0x56
+
+
+def _ctrl_v_down():
+    """전역 Ctrl+V 키 상태 확인"""
+    ctrl = ctypes.windll.user32.GetAsyncKeyState(_VK_CONTROL) & 0x8000
+    v = ctypes.windll.user32.GetAsyncKeyState(_VK_V) & 0x8000
+    return bool(ctrl and v)
+
+
+def _get_clipboard():
+    """클립보드 텍스트 읽기: ctypes → PowerShell 순 시도"""
+    try:
+        u = ctypes.windll.user32
+        k = ctypes.windll.kernel32
+        u.GetClipboardData.restype = ctypes.c_void_p
+        k.GlobalLock.restype = ctypes.c_void_p
+        if u.OpenClipboard(None):
+            try:
+                h = u.GetClipboardData(13)  # CF_UNICODETEXT
+                if h:
+                    p = k.GlobalLock(h)
+                    if p:
+                        try:
+                            return ctypes.wstring_at(p)
+                        finally:
+                            k.GlobalUnlock(h)
+            finally:
+                u.CloseClipboard()
+    except Exception:
+        pass
+    try:
+        r = subprocess.run(
+            ["powershell", "-NoProfile", "-Command", "Get-Clipboard"],
+            capture_output=True, text=True, timeout=3,
+            creationflags=0x08000000,
+        )
+        return r.stdout.strip()
+    except Exception:
+        return ""
 
 
 async def _apply_stealth(context):
@@ -24,59 +66,46 @@ async def _make_context(browser, ua):
     return ctx
 
 
-def _get_clipboard():
-    try:
-        CF_UNICODETEXT = 13
-        ctypes.windll.user32.OpenClipboard(0)
-        handle = ctypes.windll.user32.GetClipboardData(CF_UNICODETEXT)
-        if not handle:
-            return ""
-        ptr = ctypes.windll.kernel32.GlobalLock(handle)
-        if not ptr:
-            return ""
-        text = ctypes.wstring_at(ptr)
-        ctypes.windll.kernel32.GlobalUnlock(handle)
-        return text
-    except Exception:
-        return ""
-    finally:
-        try:
-            ctypes.windll.user32.CloseClipboard()
-        except Exception:
-            pass
-
-
 async def _do_login(browser, ua):
-    """로그인 창 열기 → 클립보드 감지로 아이디/비번 자동 입력 → 완료 감지"""
+    """로그인 창 열기 → 외부 창에서 Ctrl+V 감지 → 봇 Chrome에 자동 입력"""
     context = await _make_context(browser, ua)
     page = await context.new_page()
     await page.goto("https://nid.naver.com/nidlogin.login")
     await page.bring_to_front()
+
+    try:
+        await page.wait_for_selector('#id', timeout=10000)
+    except Exception:
+        pass
+
     print("[로그인] Chrome 창에서 네이버에 로그인해주세요...")
 
-    prev_clip = await asyncio.to_thread(_get_clipboard)
-    filled = 0  # 0=없음, 1=아이디입력됨, 2=비번입력됨
+    prev_down = False
+    filled = 0
 
-    for _ in range(600):  # 0.5s × 600 = 5분
-        await asyncio.sleep(0.5)
+    for _ in range(6000):  # 50ms × 6000 = 5분
+        await asyncio.sleep(0.05)
         if stopper.is_set():
             print("[로그인] 중지 요청 — 로그인 취소")
             raise asyncio.CancelledError()
 
         if filled < 2:
-            curr = await asyncio.to_thread(_get_clipboard)
-            if curr and curr != prev_clip:
-                try:
-                    if filled == 0:
-                        await page.locator('#id').fill(curr)
-                    else:
-                        await page.locator('#pw').fill(curr)
-                        await asyncio.sleep(0.3)
-                        await page.locator('button[type=submit]').click()
-                    filled += 1
-                except Exception:
-                    pass
-                prev_clip = curr
+            now_down = _ctrl_v_down()
+            if now_down and not prev_down:
+                await asyncio.sleep(0.05)  # 클립보드 확정 대기
+                clip = _get_clipboard().strip()
+                if clip:
+                    try:
+                        if filled == 0:
+                            await page.locator('#id').fill(clip)
+                        else:
+                            await page.locator('#pw').fill(clip)
+                            await asyncio.sleep(0.3)
+                            await page.locator('button[type=submit]').click()
+                        filled += 1
+                    except Exception:
+                        pass
+            prev_down = now_down
 
         if "naver.com" in page.url and "nidlogin" not in page.url:
             break

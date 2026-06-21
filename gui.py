@@ -50,7 +50,7 @@ ctk.set_default_color_theme("blue")
 
 _BASE_DIR = Path(sys.executable).parent if getattr(sys, "frozen", False) else Path(__file__).parent
 ENV_PATH = _BASE_DIR / ".env"
-APP_VERSION = "v2.0.11"
+APP_VERSION = "v2.0.18"
 APP_TITLE   = f"Bamhobak Blog Bot {APP_VERSION}"
 
 _DEFAULT_GITHUB_TOKEN  = ""
@@ -2815,23 +2815,7 @@ class App(ctk.CTk):
 
     def _show_update_notification(self):
         try:
-            info = getattr(self, "_update_info", {})
-            ver  = info.get("version", "")
-            self._update_btn.configure(text=f"{ver} 업데이트")
-            self._update_btn.pack(side="left", padx=(0, 6))
-            self._update_blink_state = True
-            self._blink_update_btn()
-        except Exception:
-            pass
-
-    def _blink_update_btn(self):
-        try:
-            if not self._update_btn.winfo_ismapped():
-                return
-            self._update_blink_state = not self._update_blink_state
-            color = "#1E8259" if self._update_blink_state else "#5CCC8A"
-            self._update_btn.configure(fg_color=color)
-            self.after(500, self._blink_update_btn)
+            self.after(0, self._show_update_dialog)
         except Exception:
             pass
 
@@ -2840,23 +2824,18 @@ class App(ctk.CTk):
         dlg = ctk.CTkToplevel(self)
         dlg.wm_attributes("-alpha", 0)
         dlg.title("업데이트")
-        dlg.geometry("380x210")
+        dlg.geometry("340x200")
         dlg.resizable(False, False)
         dlg.grab_set()
         sw, sh = self.winfo_screenwidth(), self.winfo_screenheight()
-        dlg.geometry(f"380x210+{(sw-380)//2}+{(sh-210)//2}")
+        dlg.geometry(f"340x200+{(sw-340)//2}+{(sh-200)//2}")
 
-        _lbl(dlg, f"새 버전  {info.get('version','')}  업데이트 가능",
-             font=F_B, color=C["text"]).pack(pady=(24, 6))
-        notes = info.get("notes", "")
-        if notes:
-            _lbl(dlg, notes, font=F_SM, color=C["subtext"]).pack(pady=(0, 14))
-        else:
-            ctk.CTkFrame(dlg, fg_color="transparent", height=14).pack()
+        _lbl(dlg, "업데이트가 있습니다.", font=F_B, color=C["text"]).pack(pady=(30, 6))
+        _lbl(dlg, "업데이트를 진행해주세요.", font=F_SM, color=C["subtext"]).pack(pady=(0, 20))
 
         if not getattr(sys, "frozen", False):
             _lbl(dlg, "⚠️ 개발 환경에서는 업데이트를 지원하지 않습니다.",
-                 font=F_SM, color=C["err"]).pack(pady=8)
+                 font=F_SM, color=C["err"]).pack(pady=4)
             _btn(dlg, "확인", dlg.destroy).pack()
             dlg.after(50, lambda: dlg.wm_attributes("-alpha", 1))
             return

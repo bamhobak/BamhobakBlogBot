@@ -28,6 +28,7 @@ def _get_clipboard():
         r = subprocess.run(
             ["powershell", "-NoProfile", "-Command", "Get-Clipboard"],
             capture_output=True, text=True, timeout=3,
+            creationflags=subprocess.CREATE_NO_WINDOW,
         )
         return r.stdout.strip()
     except Exception:

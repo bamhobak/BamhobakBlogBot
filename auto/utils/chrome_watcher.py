@@ -31,6 +31,7 @@ def _chrome_pids() -> set:
         result = subprocess.run(
             ["tasklist", "/FI", "IMAGENAME eq chrome.exe", "/FO", "CSV", "/NH"],
             capture_output=True, text=True, timeout=5,
+            creationflags=subprocess.CREATE_NO_WINDOW,
         )
         pids = set()
         for line in result.stdout.strip().splitlines():

@@ -50,7 +50,7 @@ ctk.set_default_color_theme("blue")
 
 _BASE_DIR = Path(sys.executable).parent if getattr(sys, "frozen", False) else Path(__file__).parent
 ENV_PATH = _BASE_DIR / ".env"
-APP_VERSION = "v1.8.52"
+APP_VERSION = "v2.0.02"
 APP_TITLE   = f"Bamhobak Blog Bot {APP_VERSION}"
 
 _DEFAULT_GITHUB_TOKEN  = ""
@@ -90,8 +90,8 @@ class RichText(tk.Text):
             relief="flat", bd=0,
             font=(self._FF, 11),
             wrap="word",
-            state="disabled",
-            cursor="arrow",
+            state="normal",
+            cursor="xterm",
             selectbackground="#4F6FE8",
             selectforeground="white",
             padx=10, pady=4,
@@ -102,6 +102,7 @@ class RichText(tk.Text):
         self._fg = fg
         self._sep_widgets = []
         self._setup_tags()
+        self.bind("<<Paste>>", self._on_paste)
 
     def _setup_tags(self):
         ff = self._FF
@@ -161,8 +162,16 @@ class RichText(tk.Text):
         self.window_create("end", window=btn_w, padx=2)
         self._sep_widgets.append(btn_w)
 
+    def _on_paste(self, event):
+        try:
+            text = self.winfo_toplevel().clipboard_get()
+            if text.strip():
+                self.set_markdown(text)
+                return "break"
+        except Exception:
+            pass
+
     def set_markdown(self, md: str):
-        self.config(state="normal")
         self.delete("1.0", "end")
         for w in self._sep_widgets:
             try: w.destroy()
@@ -180,8 +189,6 @@ class RichText(tk.Text):
             if stripped and not is_hr:
                 self._insert_copy_btn(line)
             self._insert_line(line)
-
-        self.config(state="disabled")
 
     def _insert_line(self, line):
         stripped = line.strip()
@@ -623,6 +630,7 @@ class App(ctk.CTk):
             self._apply_guest_mode()
         threading.Thread(target=self._auto_start_browser, daemon=True).start()
         threading.Thread(target=self._auto_warmup_hf, daemon=True).start()
+        threading.Thread(target=self._chrome_launch_watcher, daemon=True).start()
         threading.Thread(target=self._sync_remote_prompts, daemon=True).start()
         threading.Thread(target=self._check_for_update, daemon=True).start()
         self.after(2000, self._check_update_log)
@@ -1001,6 +1009,10 @@ class App(ctk.CTk):
                 getattr(self, attr).pack_forget()
             except Exception:
                 pass
+        try:
+            self._auto_btn.pack_forget()
+        except Exception:
+            pass
         self._rebuild_selector()
 
     def _show_access_denied(self, mac: str):
@@ -1355,7 +1367,7 @@ class App(ctk.CTk):
 
         # 헤더 탭 버튼
         tab_btn_area = ctk.CTkFrame(hdr, fg_color="transparent")
-        tab_btn_area.pack(side="left", padx=(16, 0))
+        tab_btn_area.pack(side="left", padx=(4, 0), pady=8)
 
         tab1_frame = ctk.CTkFrame(self, fg_color=C["card"],
                                   border_color=C["border"], border_width=1, corner_radius=14)
@@ -1377,12 +1389,13 @@ class App(ctk.CTk):
             btn_tab1.configure(fg_color="transparent", text_color="white", hover_color="#6478EB")
 
         self._auto_btn = ctk.CTkButton(
-            tab_btn_area, text="🤖  자동화 로그인", command=self._launch_naver_auto,
+            tab_btn_area, text="🤖  오토봇", command=self._launch_naver_auto,
             height=28, font=("Malgun Gothic", 12, "bold"),
             fg_color="#2A9D6F", hover_color="#1E8259",
             text_color="white", corner_radius=8,
         )
-        self._auto_btn.pack(side="left", padx=(0, 5))
+        if not self._is_guest:
+            self._auto_btn.pack(side="left", padx=(0, 5))
         self._auto_proc = None
 
         ctk.CTkLabel(tab_btn_area, text="|", width=10,
@@ -1439,6 +1452,30 @@ class App(ctk.CTk):
         else:
             self._auto_proc = None
             self._auto_btn.configure(fg_color="#2A9D6F", hover_color="#1E8259")
+
+    def _chrome_launch_watcher(self):
+        """Chrome이 새로 켜지면 오토봇 자동 시작"""
+        import subprocess, time
+
+        def chrome_running():
+            try:
+                r = subprocess.run(
+                    ["tasklist", "/FI", "IMAGENAME eq chrome.exe", "/FO", "CSV", "/NH"],
+                    capture_output=True, text=True, timeout=5,
+                )
+                return "chrome.exe" in r.stdout.lower()
+            except Exception:
+                return False
+
+        was_running = chrome_running()
+        while True:
+            time.sleep(2)
+            now_running = chrome_running()
+            if not was_running and now_running:
+                proc = getattr(self, "_auto_proc", None)
+                if not (proc and proc.is_alive()):
+                    self.after(0, self._launch_naver_auto)
+            was_running = now_running
 
     # ── 생성하기 탭 ──────────────────────────────────────
     def _build_generate_tab(self, parent):
@@ -2250,7 +2287,6 @@ class App(ctk.CTk):
             import numpy as np
         except Exception:
             np = None
-        _local_mode = vs is None
         if vs is None:
             vs = self._var_settings
             # 가로 최대 크기 리사이즈는 이미지 선택 모드에서만
@@ -2270,61 +2306,27 @@ class App(ctk.CTk):
         img = img.copy().convert("RGB")
         w, h = img.size
 
-        # 배너형 이미지 감지: 이미지 선택 모드에서만 적용 (PICSUM/FLICKR는 항상 False)
+        # 배너형 이미지 감지 (로컬 모드에서만)
         is_banner = False
-        if _local_mode:
-            if np is not None:
-                arr_check = np.array(img, dtype=np.uint8)
-                ph, pw = arr_check.shape[:2]
-                # ① 흰색 배경 체크
-                white_mask = (arr_check[..., 0] > 210) & (arr_check[..., 1] > 210) & (arr_check[..., 2] > 210)
-                if white_mask.mean() > 0.25:
+        if vs is self._var_settings and np is not None:
+            arr_check = np.array(img, dtype=np.uint8)
+            ph, pw = arr_check.shape[:2]
+            white_mask = (arr_check[..., 0] > 210) & (arr_check[..., 1] > 210) & (arr_check[..., 2] > 210)
+            if white_mask.mean() > 0.25:
+                is_banner = True
+            if not is_banner:
+                small = arr_check[::8, ::8].reshape(-1, 3)
+                q = (small // 64).astype(np.uint8)
+                _, counts = np.unique(q, axis=0, return_counts=True)
+                if counts.max() / len(small) > 0.18:
                     is_banner = True
-                if not is_banner:
-                    # ② 전체 단색 배경: 64단위 큰 빈으로 색상 변이 허용
-                    small = arr_check[::8, ::8].reshape(-1, 3)
-                    q = (small // 64).astype(np.uint8)
-                    _, counts = np.unique(q, axis=0, return_counts=True)
-                    if counts.max() / len(small) > 0.18:
-                        is_banner = True
-                if not is_banner:
-                    # ③ 상단 35% 배경색 분산 체크 (배경 std < 40 → 단색 배너)
-                    top_strip = arr_check[:max(1, int(ph * 0.35)), :, :]
-                    top_small = top_strip[::4, ::4].reshape(-1, 3).astype(np.float32)
-                    brightness = top_small.mean(axis=1)
-                    bg_mask = (brightness > 40) & (brightness < 215)
-                    if bg_mask.sum() > 200:
-                        bg_std = top_small[bg_mask].std(axis=0)
-                        if bg_std.max() < 40:
-                            is_banner = True
-                if not is_banner:
-                    # ④ 좌측 45% 배경색 분산 체크 (좌우 레이아웃 카드뉴스)
-                    left_strip = arr_check[:, :max(1, int(pw * 0.45)), :]
-                    left_small = left_strip[::4, ::4].reshape(-1, 3).astype(np.float32)
-                    brightness_l = left_small.mean(axis=1)
-                    bg_mask_l = (brightness_l > 40) & (brightness_l < 215)
-                    if bg_mask_l.sum() > 200:
-                        bg_std_l = left_small[bg_mask_l].std(axis=0)
-                        if bg_std_l.max() < 40:
-                            is_banner = True
-            else:
-                # numpy 없을 때: PIL quantize로 지배적 색상 비율 확인
-                try:
-                    img_q = img.resize((60, 60)).quantize(colors=4)
-                    colors = img_q.getcolors(maxcolors=3600)
-                    if colors:
-                        total = sum(c for c, _ in colors)
-                        is_banner = max(c for c, _ in colors) / total > 0.20
-                    if not is_banner:
-                        top_q = img.crop((0, 0, img.width, img.height // 2)).resize((60, 30)).quantize(colors=4)
-                        top_colors = top_q.getcolors(maxcolors=3600)
-                        if top_colors:
-                            top_total = sum(c for c, _ in top_colors)
-                            is_banner = max(c for c, _ in top_colors) / top_total > 0.35
-                except Exception:
-                    from PIL import ImageStat
-                    stat = ImageStat.Stat(img)
-                    is_banner = min(stat.mean) > 200
+            if not is_banner:
+                px_lum = arr_check.astype(np.float32).mean(axis=2)
+                bright_frac = float((px_lum > 200).mean())
+                dark_frac   = float((px_lum < 60).mean())
+                mean_brightness = float(arr_check.astype(np.float32).mean())
+                if mean_brightness > 200 or (bright_frac > 0.50 and dark_frac > 0.02):
+                    is_banner = True
 
         c_lo = vs["crop_pct_min"] / 100.0
         c_hi = vs["crop_pct_max"] / 100.0
@@ -2371,12 +2373,6 @@ class App(ctk.CTk):
             if 0 < pad < min(ow, oh) // 4:
                 img = img.crop((pad, pad, ow - pad, oh - pad))
                 img = img.resize((ow, oh), Image.LANCZOS)
-
-        # 배너 이미지 전용 다양성: 소폭 밝기 변화
-        if is_banner:
-            br_b = random.uniform(-0.05, 0.05)
-            if abs(br_b) > 0.005:
-                img = ImageEnhance.Brightness(img).enhance(max(0.90, 1.0 + br_b))
 
         nz_lo = int(vs["noise_min"])
         nz_hi = int(vs["noise_max"])
@@ -2441,7 +2437,7 @@ class App(ctk.CTk):
         # 미세 이동 (Translation) — 전체 이미지를 ±px 이동 후 리사이즈
         tr_lo = vs["translate_min"]
         tr_hi = vs["translate_max"]
-        if tr_hi > 0 and not is_banner:
+        if tr_hi > 0:
             dx = int(random.uniform(tr_lo, tr_hi)) * (1 if random.random() < 0.5 else -1)
             dy = int(random.uniform(tr_lo, tr_hi)) * (1 if random.random() < 0.5 else -1)
             if dx != 0 or dy != 0:
@@ -3018,6 +3014,21 @@ Remove-Item -Path (Split-Path $log) -Recurse -Force -ErrorAction SilentlyContinu
         w_var_picsum    = {k: v for k, v in self._var_settings_picsum.items()}
         w_var_flickr    = {k: v for k, v in self._var_settings_flickr.items()}
 
+        # tab2 lazy build 전에도 _save()에서 참조하므로 미리 초기화
+        mw_entry = None
+        _ps_w_entry = None; _ps_h_entry = None
+        _fl_w_entry = None; _fl_h_entry = None; _fl_kw_entry = None
+
+        # tab5 lazy build 전에도 _save()에서 참조하므로 미리 초기화
+        c5_opt_count_var      = tk.StringVar(value=str(self._collect_count))
+        c5_opt_skip_var       = tk.StringVar(value=str(self._collect_skip))
+        c5_opt_chunk_var      = tk.StringVar(value=self._collect_chunk)
+        c5_opt_maxch_var      = tk.StringVar(value=str(self._collect_maxchars))
+        c5_opt_header_var     = tk.StringVar(value=self._collect_header)
+        c5_opt_delimiters_var = tk.StringVar(value=self._collect_delimiters)
+        c5_opt_ending_var     = tk.StringVar(value=self._collect_ending)
+        c5_opt_bottom_var     = tk.StringVar(value=self._collect_bottom)
+
         # ── 탭 버튼 행 ────────────────────────────────────
         tab_btn_row = ctk.CTkFrame(dlg, fg_color=C["accent_bg"], corner_radius=0, height=36)
         tab_btn_row.pack(fill="x", padx=0, pady=0)
@@ -3058,12 +3069,8 @@ Remove-Item -Path (Split-Path $log) -Recurse -Force -ErrorAction SilentlyContinu
             if _clear_btn_ref[0]:
                 if n == 2:
                     _clear_btn_ref[0].pack(side="right", padx=(6, 0))
-                    save_notify.pack_forget()
-                    save_notify.pack(side="right", padx=(0, 8))
                 else:
                     _clear_btn_ref[0].pack_forget()
-                    save_notify.pack_forget()
-                    save_notify.pack(side="right", padx=(0, 8))
 
         tab1_btn = ctk.CTkButton(
             tab_btn_row, text="프롬프트 옵션",
@@ -3106,7 +3113,7 @@ Remove-Item -Path (Split-Path $log) -Recurse -Force -ErrorAction SilentlyContinu
         tab4_btn_ref[0] = tab4_btn
 
         tab6_btn = ctk.CTkButton(
-            tab_btn_row, text="자동봇",
+            tab_btn_row, text="오토봇",
             command=lambda: _show_tab(6),
             width=100, height=32, font=F_SMB,
             fg_color="transparent", hover_color=C["border"],
@@ -3551,6 +3558,7 @@ Remove-Item -Path (Split-Path $log) -Recurse -Force -ErrorAction SilentlyContinu
         _t5_save = [None]; _t5_built = [False]
 
         def _build_tab2():
+            nonlocal mw_entry, _ps_w_entry, _ps_h_entry, _fl_w_entry, _fl_h_entry, _fl_kw_entry
             # ── 탭2 내용: 이미지 변형 설정 ──────────────────────────
             _VAR_PARAMS = [
                 ("랜덤 크롭 범위",        "crop_pct",         0,  15,  0.5,  "{:.1f}%"),
@@ -3952,8 +3960,8 @@ Remove-Item -Path (Split-Path $log) -Recurse -Force -ErrorAction SilentlyContinu
             def _save_mac():
                 self._mac_entries = [dict(e) for e in mac_entries_work]
                 self._save_prefs()
-                save_notify.configure(text="✅ 저장됨")
-                dlg.after(2000, lambda: save_notify.configure(text=""))
+                _save_btn.configure(text="✅ 저장됨", fg_color=C["ok"])
+                dlg.after(2000, lambda: _save_btn.configure(text="저장", fg_color=C["accent"]))
 
             _t3_save[0] = _save_mac
 
@@ -4316,8 +4324,8 @@ Remove-Item -Path (Split-Path $log) -Recurse -Force -ErrorAction SilentlyContinu
                 self._topic_rows = [list(r) for r in working_rows]
                 self._save_prefs()
                 self._update_topic_state()
-                save_notify.configure(text="✅ 저장됨")
-                dlg.after(2000, lambda: save_notify.configure(text=""))
+                _save_btn.configure(text="✅ 저장됨", fg_color=C["ok"])
+                dlg.after(2000, lambda: _save_btn.configure(text="저장", fg_color=C["accent"]))
 
             _btn(tl_btn_row, "+ 주제 추가", _add_kw, w=100, h=30).pack(side="left")
             _btn(tl_btn_row, "🗑 삭제", _del_kw, w=80, h=30,
@@ -4338,15 +4346,6 @@ Remove-Item -Path (Split-Path $log) -Recurse -Force -ErrorAction SilentlyContinu
             import threading as _threading
             import naver_collector as _nc
 
-            c5_opt_count_var      = tk.StringVar(value=str(self._collect_count))
-            c5_opt_skip_var       = tk.StringVar(value=str(self._collect_skip))
-            c5_opt_chunk_var      = tk.StringVar(value=self._collect_chunk)
-            c5_opt_maxch_var      = tk.StringVar(value=str(self._collect_maxchars))
-            c5_opt_header_var     = tk.StringVar(value=self._collect_header)
-            c5_opt_delimiters_var = tk.StringVar(value=self._collect_delimiters)
-            c5_opt_ending_var     = tk.StringVar(value=self._collect_ending)
-            c5_opt_bottom_var     = tk.StringVar(value=self._collect_bottom)
-
             def _c5_save_opts():
                 try: self._collect_count    = int(c5_opt_count_var.get())
                 except Exception: pass
@@ -4361,8 +4360,8 @@ Remove-Item -Path (Split-Path $log) -Recurse -Force -ErrorAction SilentlyContinu
                 self._collect_ending        = c5_opt_ending_var.get().strip()
                 self._collect_bottom        = c5_opt_bottom_var.get().strip()
                 self._save_prefs()
-                save_notify.configure(text="✅ 저장됨")
-                dlg.after(2000, lambda: save_notify.configure(text=""))
+                _save_btn.configure(text="✅ 저장됨", fg_color=C["ok"])
+                dlg.after(2000, lambda: _save_btn.configure(text="저장", fg_color=C["accent"]))
 
             # ── 옵션 영역 (side="bottom") ─────────────────────
             c5_opt_frame = ctk.CTkFrame(tab5_content, fg_color=C["input_bg"],
@@ -4705,8 +4704,8 @@ Remove-Item -Path (Split-Path $log) -Recurse -Force -ErrorAction SilentlyContinu
                 import tkinter.messagebox as _mb2
                 _mb2.showerror("자동봇 설정 저장 실패", str(_e), parent=dlg)
                 return
-            save_notify.configure(text="✅ 저장됨")
-            dlg.after(2000, lambda: save_notify.configure(text=""))
+            _save_btn.configure(text="✅ 저장됨", fg_color=C["ok"])
+            dlg.after(2000, lambda: _save_btn.configure(text="저장", fg_color=C["accent"]))
 
         # ── 탭1을 기본으로 표시 ───────────────────────────
         def _do_save():
@@ -4718,7 +4717,7 @@ Remove-Item -Path (Split-Path $log) -Recurse -Force -ErrorAction SilentlyContinu
             elif n == 6:                 _save_auto()
 
         # ── 하단 버튼 내용 채우기 ─────────────────────────
-        save_notify = ctk.CTkLabel(btn_row, text="", font=F_SM, text_color=C["ok"])
+        save_notify = None  # 미사용 (저장 버튼 텍스트로 대체)
 
         def _save():
             working_names[cur_idx[0]]   = name_entry.get().strip() or f"옵션 {cur_idx[0]+1}"
@@ -4755,7 +4754,7 @@ Remove-Item -Path (Split-Path $log) -Recurse -Force -ErrorAction SilentlyContinu
             self._var_settings_flickr = {k: v for k, v in w_var_flickr.items()}
             try:
                 self._max_width = max(0, int(mw_entry.get().strip() or "0"))
-            except ValueError:
+            except (ValueError, AttributeError):
                 self._max_width = 0
             try:
                 self._picsum_width  = max(100, int(_ps_w_entry.get().strip() or "900"))
@@ -4792,8 +4791,8 @@ Remove-Item -Path (Split-Path $log) -Recurse -Force -ErrorAction SilentlyContinu
                     ENV_PATH.write_text("\n".join(lines) + "\n", encoding="utf-8")
                 except Exception:
                     pass
-            save_notify.configure(text="✅ 저장됨")
-            dlg.after(2000, lambda: save_notify.configure(text=""))
+            _save_btn.configure(text="✅ 저장됨", fg_color=C["ok"])
+            dlg.after(2000, lambda: _save_btn.configure(text="저장", fg_color=C["accent"]))
 
         def _clear():
             if active_tab[0] == 2:
@@ -4816,7 +4815,6 @@ Remove-Item -Path (Split-Path $log) -Recurse -Force -ErrorAction SilentlyContinu
 
         _save_btn = _btn(btn_row, "저장", _do_save, w=100, h=34)
         _save_btn.pack(side="right", padx=(6, 0))
-        save_notify.pack(side="right", padx=(0, 8))
         _clear_btn_ref[0] = _btn(btn_row, "초기화", _clear, w=80, h=34,
                                  color=C["subtext"], hover=C["text"])
         _show_tab(1)
@@ -5118,9 +5116,13 @@ Remove-Item -Path (Split-Path $log) -Recurse -Force -ErrorAction SilentlyContinu
 
     # ── 이미지만 생성 ────────────────────────────────────
     def _start_image_only(self):
-        kw = self._check_ready()
-        if not kw: return
-        if getattr(self, "_img_source", "AI") not in ("픽숨", "플리커") and (not config.CF_ACCOUNT_ID or not config.CF_API_TOKEN):
+        src = getattr(self, "_img_source", "AI")
+        if src in ("픽숨", "플리커"):
+            kw = self.keyword_entry.get().strip() if not self._is_secret_mode() else ""
+        else:
+            kw = self._check_ready()
+            if not kw: return
+        if src not in ("픽숨", "플리커") and (not config.CF_ACCOUNT_ID or not config.CF_API_TOKEN):
             self._set_status("⚠️  설정 탭에서 Cloudflare 자격증명을 먼저 입력해 주세요.", color=C["err"]); return
         self._stop_event.clear()
         count = self._get_img_count()

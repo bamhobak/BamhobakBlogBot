@@ -8,17 +8,24 @@ import random
 import json
 import time
 import urllib.parse
-from datetime import date
+from datetime import datetime, date, timedelta
 from pathlib import Path
 
 _CACHE_FILE = Path(__file__).parent.parent / "trend_cache.json"
+
+
+def _target_date() -> date:
+    """DataLab 수집 기준 날짜. 09:00 이후면 전일, 미만이면 전전일."""
+    now = datetime.now()
+    offset = 1 if now.hour >= 9 else 2
+    return date.today() - timedelta(days=offset)
 
 
 def _load_trend_cache() -> list:
     try:
         if _CACHE_FILE.exists():
             data = json.loads(_CACHE_FILE.read_text(encoding="utf-8"))
-            if data.get("date") == str(date.today()):
+            if data.get("date") == str(_target_date()):
                 kws = data.get("keywords", [])
                 if kws:
                     print(f"[키워드] 캐시 로드 ({data['date']}, {len(kws)}개) — DataLab 수집 생략")
@@ -31,7 +38,7 @@ def _load_trend_cache() -> list:
 def _save_trend_cache(keywords: list) -> None:
     try:
         _CACHE_FILE.write_text(
-            json.dumps({"date": str(date.today()), "keywords": keywords}, ensure_ascii=False),
+            json.dumps({"date": str(_target_date()), "keywords": keywords}, ensure_ascii=False),
             encoding="utf-8"
         )
     except Exception:
@@ -106,37 +113,32 @@ _POOL = [
 ]
 
 
-_DATALAB_JS = """() => {
-    // 어제 날짜 문자열 계산 (예: "2026.06.19")
-    const d = new Date();
-    d.setDate(d.getDate() - 1);
-    const ymd = d.getFullYear() + '.' +
-        String(d.getMonth()+1).padStart(2,'0') + '.' +
-        String(d.getDate()).padStart(2,'0');
-
-    // 텍스트 노드를 순회하여 어제 날짜가 포함된 노드 탐색
+def _make_datalab_js(target: date) -> str:
+    ymd = target.strftime("%Y.%m.%d")
+    return f"""() => {{
+    const ymd = "{ymd}";
     const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
     let dateNode = null, node;
-    while ((node = walker.nextNode())) {
-        if (node.textContent.trim().startsWith(ymd)) { dateNode = node; break; }
-    }
+    while ((node = walker.nextNode())) {{
+        if (node.textContent.trim().startsWith(ymd)) {{ dateNode = node; break; }}
+    }}
     if (!dateNode) return [];
 
-    // 날짜 노드에서 위로 올라가며 .rank_list 가진 컨테이너 탐색
     let el = dateNode.parentElement;
-    for (let i = 0; i < 8; i++) {
+    for (let i = 0; i < 8; i++) {{
         if (!el) break;
         const rl = el.querySelector('.rank_list');
-        if (rl) {
+        if (rl) {{
             return [...rl.querySelectorAll('li')]
                 .map(li => li.textContent.trim().replace(/^\\d+\\.?\\s*/, '').trim())
                 .filter(t => t.length > 1 && /[가-힣]/.test(t))
                 .slice(0, 10);
-        }
+        }}
         el = el.parentElement;
-    }
+    }}
     return [];
-}"""
+}}"""
+
 
 _CATEGORIES = [
     '패션의류', '패션잡화', '화장품/미용', '디지털/가전', '가구/인테리어',
@@ -145,7 +147,10 @@ _CATEGORIES = [
 
 
 async def _fetch_datalab_trends(pw) -> list:
-    """DataLab 분야별 인기 검색어 — 12카테고리 × 어제자 TOP10"""
+    """DataLab 분야별 인기 검색어 — 12카테고리 × 기준일 TOP10"""
+    target = _target_date()
+    js = _make_datalab_js(target)
+    print(f"[키워드] DataLab 수집 기준일: {target} (현재 {datetime.now().strftime('%H:%M')})")
     browser = None
     try:
         browser = await pw.chromium.launch(channel="chrome", headless=True)
@@ -159,7 +164,7 @@ async def _fetch_datalab_trends(pw) -> list:
             await page.goto("https://datalab.naver.com/", wait_until="networkidle", timeout=15000)
             await page.wait_for_timeout(1000)
 
-            all_kws = await page.evaluate(_DATALAB_JS)
+            all_kws = await page.evaluate(js)
 
             for cat in _CATEGORIES[1:]:
                 try:
@@ -167,7 +172,7 @@ async def _fetch_datalab_trends(pw) -> list:
                     await page.wait_for_timeout(150)
                     await page.locator(f'a.option:has-text("{cat}")').first.click()
                     await page.wait_for_timeout(700)
-                    all_kws.extend(await page.evaluate(_DATALAB_JS))
+                    all_kws.extend(await page.evaluate(js))
                 except Exception as e:
                     print(f"[키워드] {cat} 실패: {e}")
 
@@ -190,7 +195,7 @@ async def _fetch_datalab_trends(pw) -> list:
 async def get_run_keywords(pw, cfg_keywords: list, count: int = 20) -> list:
     """
     실행마다 사용할 키워드 `count`개를 반환.
-    - 당일 캐시 있으면 DataLab 수집 생략
+    - 기준일 캐시 있으면 DataLab 수집 생략
     - DataLab 트렌드 수집 성공: 절반은 트렌드, 절반은 사용자/내장 풀에서 섞어서 반환
     - 수집 실패: 사용자/내장 풀에서만 랜덤 추출
     """

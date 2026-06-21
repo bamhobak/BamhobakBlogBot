@@ -47,7 +47,6 @@ class StatusWindow:
         root = tk.Tk()
         root.title("네이버 자동화 로그")
         root.geometry("420x160+10+10")
-        root.attributes("-topmost", True)
         root.resizable(True, False)
         root.configure(bg="#1e1e2e")
         # ── 로그 텍스트 ───────────────────────────────────────────────────
